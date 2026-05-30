@@ -16,7 +16,7 @@ from typing import Optional
 from zarchiver.config import HtmlConfig
 from zarchiver.exporters.assets import Fetcher, download_images, localize_images
 from zarchiver.exporters.base import Exporter, ExportResult
-from zarchiver.exporters.obsidian import sanitize_filename
+from zarchiver.exporters.obsidian import _dedupe_tags, sanitize_filename
 from zarchiver.models import ArchiveItem
 
 _TEMPLATE = """<!DOCTYPE html>
@@ -128,7 +128,7 @@ class HtmlExporter(Exporter):
                 f'<div class="ai-box"><span class="label">AI 摘要：</span>'
                 f"{html_lib.escape(item.ai.summary)}</div>"
             )
-        tags = list(item.topics) + list(item.ai.tags)
+        tags = _dedupe_tags(list(item.topics) + list(item.ai.tags))
         if tags or item.ai.category:
             spans = ""
             if item.ai.category:
