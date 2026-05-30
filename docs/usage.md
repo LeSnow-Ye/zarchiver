@@ -34,31 +34,50 @@ credentials, then press Enter in the terminal. The session is written to
 
 ## `archive URL`
 
-Archive a single answer or article. If you pass a batch URL (collection, column,
-question) it automatically switches to batch mode.
+The one command for everything. The kind of URL is auto-detected:
+
+- **Single** answer or article → archived directly.
+- **Batch** — a collection (收藏夹), column (专栏), or question → every item is
+  archived, each placed in a subdirectory named after the batch (see below).
 
 ```bash
+# Single
 uv run zarchiver archive https://zhuanlan.zhihu.com/p/35562420
 uv run zarchiver archive https://www.zhihu.com/question/19550225/answer/123456
+
+# Batch (same command)
+uv run zarchiver archive https://www.zhihu.com/collection/<id>
+uv run zarchiver archive https://zhuanlan.zhihu.com/<column-slug>
+uv run zarchiver archive https://www.zhihu.com/question/<id>
 ```
 
 Options:
 - `--no-ai` — skip AI summarization for this run.
 - `--on-duplicate skip|update|ask` — override the duplicate policy.
+- `--limit/-n N` — cap how many items a batch pulls (0 = all).
+- `--subdir NAME` — force output into this subdirectory instead of the
+  batch-named default. Use `--subdir ''` to write directly into the base folder
+  with no subdirectory.
 
-## Batch commands
+For batch URLs, zarchiver scrolls the page to load entries, then archives each
+one with a polite randomized delay between requests.
 
-```bash
-uv run zarchiver collection https://www.zhihu.com/collection/<id>
-uv run zarchiver column     https://zhuanlan.zhihu.com/<slug>
-uv run zarchiver question   https://www.zhihu.com/question/<id>
+### Batch subdirectories
+
+By default, a batch archive groups its items into a subdirectory named after the
+collection / column / question, under both the vault folder and the HTML output
+(and a matching subfolder under assets). For example, archiving the column
+"次元壁" writes:
+
+```
+vault/Zhihu/次元壁/<note>.md
+vault/Zhihu/assets/次元壁/<image>.jpg
+archive/html/次元壁/<page>.html
+archive/html/次元壁/assets/<image>.jpg
 ```
 
-Each accepts `--limit/-n N` to cap how many items are pulled (0 = all), plus the
-same `--no-ai` and `--on-duplicate` options as `archive`.
-
-Batch commands scroll the page to load entries, then archive each one with a
-polite randomized delay between requests.
+Disable this globally with `obsidian.batch_subdirs = false` /
+`html.batch_subdirs = false`, or override per run with `--subdir`.
 
 ## `status`
 
@@ -73,8 +92,9 @@ uv run zarchiver status -n 30
 
 For each item zarchiver writes:
 
-- **Markdown** into `<vault_path>/<folder>/` with YAML frontmatter (title,
-  author, URL, dates, metrics, merged topic + AI tags, AI category and summary).
+- **Markdown** into `<vault_path>/<folder>/` (or a batch subdirectory) with YAML
+  frontmatter (title, author, URL, dates, metrics, merged topic + AI tags, AI
+  category and summary, plus the column and/or collection it belongs to).
 - **HTML** into `<html.output_path>/` — a styled, self-contained page.
 - **Images** downloaded into the assets folders, with links rewritten to local
   relative paths.

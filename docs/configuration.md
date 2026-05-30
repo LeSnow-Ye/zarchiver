@@ -55,6 +55,7 @@ Values are resolved in this order, later winning:
 | `assets_folder` | `Zhihu/assets` | Subfolder for images (relative to vault). |
 | `download_images` | `true` | Download images and rewrite links. |
 | `filename_template` | `{title} - {author}` | Fields: `{title} {author} {source_id} {content_type} {date}`. |
+| `batch_subdirs` | `true` | Group batch items into a subdir named after the collection/column/question. Override per run with `--subdir`. |
 | `use_cli` | `false` | Use the Obsidian CLI instead of writing files (see below). |
 | `cli_vault_name` | `""` | Vault name for the CLI. |
 
@@ -65,6 +66,7 @@ Values are resolved in this order, later winning:
 | `enabled` | `true` | Write standalone HTML. |
 | `output_path` | `archive/html` | Output directory. |
 | `embed_images` | `false` | Inline images as base64 (single-file archive). |
+| `batch_subdirs` | `true` | Group batch items into a subdir named after the batch. |
 
 ### `[ai]`
 

@@ -13,7 +13,7 @@ import re
 from typing import Iterator, Optional
 
 from zarchiver.config import Config
-from zarchiver.models import ArchiveItem
+from zarchiver.models import ArchiveItem, BatchInfo, BatchKind
 from zarchiver.sources.base import Source, SourceError
 from zarchiver.sources.zhihu import parser as P
 from zarchiver.sources.zhihu import urls as zurls
@@ -112,20 +112,26 @@ class ZhihuSource(Source):
     def _max_items(self) -> int:
         return self.config.browser.max_items  # 0 = unlimited
 
-    def _scroll_collect_links(self, url: str, link_pattern: str) -> list[str]:
-        """Open a batch page, scroll to load entries, return matching links.
+    def _scroll_collect_links(
+        self, url: str, link_pattern: str
+    ) -> tuple[list[str], Optional[dict]]:
+        """Open a batch page, scroll to load entries, return links + page data.
 
         Candidate URLs are harvested from several signals, because Zhihu's
         lazy-loaded answer/article cards don't always expose a clean ``<a>``
         href: plain anchors, ``meta[itemprop="url"]`` tags, and answer ids on
         ``.AnswerItem[data-zop]`` (reconstructed into answer URLs). All
         candidates are then filtered by ``link_pattern``.
+
+        Returns ``(links, initial_data)`` where ``initial_data`` is the page's
+        parsed ``js-initialData`` (used to extract the batch title), or None.
         """
         page = self.browser.new_page()
         found: list[str] = []
         seen: set[str] = set()
         pat = re.compile(link_pattern)
         cap = self._max_items()
+        initial_data: Optional[dict] = None
         # JS that returns every candidate item URL currently in the DOM.
         harvest_js = """() => {
             const urls = new Set();
@@ -146,6 +152,8 @@ class ZhihuSource(Source):
         }"""
         try:
             self.browser.goto(page, url)
+            # Capture the batch's own metadata before scrolling churns the DOM.
+            initial_data = P.extract_initial_data(page.content())
             stagnant = 0
             last_count = 0
             for _ in range(80):  # hard ceiling on scroll iterations
@@ -166,31 +174,56 @@ class ZhihuSource(Source):
                     last_count = len(found)
                 page.mouse.wheel(0, 4000)
                 page.wait_for_timeout(1100)
-            return found
+            return found, initial_data
         finally:
             page.close()
 
     def _fetch_collection(self, target: ZhihuTarget) -> Iterator[ArchiveItem]:
         # Collection entries link to /p/<id> (articles) and answer pages.
-        links = self._scroll_collect_links(
+        links, data = self._scroll_collect_links(
             target.raw_url,
             r"(zhuanlan\.zhihu\.com/p/\d+|/question/\d+/answer/\d+|/answer/\d+)",
         )
-        yield from self._iter_item_links(links)
+        batch = self._make_batch(
+            BatchKind.COLLECTION, data, target.collection_id, target.raw_url
+        )
+        yield from self._iter_item_links(links, batch)
 
     def _fetch_column(self, target: ZhihuTarget) -> Iterator[ArchiveItem]:
-        links = self._scroll_collect_links(
+        links, data = self._scroll_collect_links(
             target.raw_url, r"zhuanlan\.zhihu\.com/p/\d+"
         )
-        yield from self._iter_item_links(links)
+        batch = self._make_batch(
+            BatchKind.COLUMN, data, target.column_id, target.raw_url
+        )
+        yield from self._iter_item_links(links, batch)
 
     def _fetch_question_answers(self, target: ZhihuTarget) -> Iterator[ArchiveItem]:
-        links = self._scroll_collect_links(
+        links, data = self._scroll_collect_links(
             target.raw_url, rf"/question/{target.question_id}/answer/\d+"
         )
-        yield from self._iter_item_links(links)
+        batch = self._make_batch(
+            BatchKind.QUESTION, data, target.question_id, target.raw_url
+        )
+        yield from self._iter_item_links(links, batch)
 
-    def _iter_item_links(self, links: list[str]) -> Iterator[ArchiveItem]:
+    def _make_batch(
+        self,
+        kind: BatchKind,
+        data: Optional[dict],
+        batch_id: Optional[str],
+        url: str,
+    ) -> BatchInfo:
+        """Build batch context, resolving the best available title."""
+        title = P.batch_title(data, kind.value, batch_id)
+        if not title:
+            # Fall back to the batch id so a subdir always has a stable name.
+            title = f"{kind.value}-{batch_id}" if batch_id else kind.value
+        return BatchInfo(kind=kind, title=title, url=url, id=batch_id)
+
+    def _iter_item_links(
+        self, links: list[str], batch: Optional[BatchInfo] = None
+    ) -> Iterator[ArchiveItem]:
         cap = self._max_items()
         count = 0
         for link in links:
@@ -200,6 +233,7 @@ class ZhihuSource(Source):
                 item = self.fetch(link)
             except SourceError:
                 continue
+            item.batch = batch
             count += 1
             yield item
             self.browser.polite_delay()

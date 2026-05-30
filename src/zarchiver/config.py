@@ -73,6 +73,9 @@ class ObsidianConfig:
     # Filename template; available fields: {title}, {author}, {source_id},
     # {content_type}, {date}.
     filename_template: str = "{title} - {author}"
+    # For batch archives (collection/column/question), place notes and assets in
+    # a subdirectory named after the batch (e.g. <folder>/<column title>/).
+    batch_subdirs: bool = True
     # Optional Obsidian CLI integration. Requires the desktop app running;
     # off by default because it does not work headless.
     use_cli: bool = False
@@ -84,6 +87,8 @@ class HtmlConfig:
     enabled: bool = True
     output_path: str = "archive/html"
     embed_images: bool = False  # if True, inline images as base64 (self-contained)
+    # Mirror Obsidian: batch archives go in a subdirectory named after the batch.
+    batch_subdirs: bool = True
 
 
 @dataclass

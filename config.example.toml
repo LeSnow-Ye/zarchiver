@@ -41,6 +41,10 @@ assets_folder = "Zhihu/assets"
 download_images = true
 # Available fields: {title} {author} {source_id} {content_type} {date}
 filename_template = "{title} - {author}"
+# For batch archives (collection/column/question), group items into a
+# subdirectory named after the batch (e.g. Zhihu/<column title>/). Override
+# per run with --subdir.
+batch_subdirs = true
 # Optional: drive the Obsidian desktop app via its CLI. Requires the app to be
 # running, so it does not work headless. Off by default.
 use_cli = false
@@ -51,6 +55,8 @@ enabled = true
 output_path = "archive/html"
 # Inline images as base64 for fully self-contained HTML files.
 embed_images = false
+# Mirror Obsidian: batch archives go in a subdirectory named after the batch.
+batch_subdirs = true
 
 [ai]
 enabled = true

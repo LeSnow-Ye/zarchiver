@@ -45,18 +45,46 @@ def sanitize_filename(name: str, max_len: int = 120) -> str:
 class ObsidianExporter(Exporter):
     name = "obsidian"
 
-    def __init__(self, config: ObsidianConfig, *, fetch: Optional[Fetcher] = None):
+    def __init__(
+        self,
+        config: ObsidianConfig,
+        *,
+        fetch: Optional[Fetcher] = None,
+        subdir_override: Optional[str] = None,
+    ):
         self.config = config
         self._fetch = fetch  # image fetcher; if None, images are not downloaded
+        # An explicit subdir (from --subdir) forces all items into this folder,
+        # regardless of batch context.
+        self._subdir_override = subdir_override
         self.vault = Path(config.vault_path)
-        self.notes_dir = self.vault / config.folder
-        self.assets_dir = self.vault / config.assets_folder
+        self.base_notes_dir = self.vault / config.folder
+        self.base_assets_dir = self.vault / config.assets_folder
+
+    # ------------------------------------------------------------------ #
+    def _subdir_for(self, item: ArchiveItem) -> str:
+        """The per-item subdirectory (possibly empty) under the base folders."""
+        if self._subdir_override is not None:
+            return sanitize_filename(self._subdir_override) if self._subdir_override else ""
+        if self.config.batch_subdirs and item.batch is not None:
+            return sanitize_filename(item.batch.title)
+        return ""
+
+    def _dirs_for(self, item: ArchiveItem) -> tuple[Path, Path]:
+        """Resolve (notes_dir, assets_dir) for an item, applying any subdir."""
+        subdir = self._subdir_for(item)
+        notes_dir = self.base_notes_dir / subdir if subdir else self.base_notes_dir
+        assets_dir = (
+            self.base_assets_dir / subdir if subdir else self.base_assets_dir
+        )
+        return notes_dir, assets_dir
 
     # ------------------------------------------------------------------ #
     def export(self, item: ArchiveItem) -> ExportResult:
-        self.notes_dir.mkdir(parents=True, exist_ok=True)
+        notes_dir, assets_dir = self._dirs_for(item)
+        notes_dir.mkdir(parents=True, exist_ok=True)
         filename = self._filename_for(item)
-        note_path = self.notes_dir / f"{filename}.md"
+        note_path = notes_dir / f"{filename}.md"
 
         # Prepend the article title image (if any) as the first content block.
         body_html = item.content_html
@@ -71,11 +99,11 @@ class ObsidianExporter(Exporter):
         body_html, formulas = extract_formulas_for_markdown(body_html)
 
         if self.config.download_images and self._fetch is not None:
-            # Relative path from a note in notes_dir to the assets dir.
-            rel_prefix = self._assets_rel_prefix()
+            # Relative path from a note in notes_dir to its assets dir.
+            rel_prefix = self._assets_rel_prefix(notes_dir, assets_dir)
             body_html, pairs = localize_images(body_html, rel_prefix)
             if pairs:
-                download_images(pairs, self.assets_dir, self._fetch)
+                download_images(pairs, assets_dir, self._fetch)
 
         body_md = md_convert(body_html, heading_style="ATX", bullets="-")
         body_md = restore_formulas_markdown(body_md, formulas)
@@ -83,7 +111,7 @@ class ObsidianExporter(Exporter):
         document = self._frontmatter(item) + "\n" + body_md + "\n"
 
         if self.config.use_cli and shutil.which("obsidian"):
-            return self._export_via_cli(item, filename, document)
+            return self._export_via_cli(item, filename, document, notes_dir)
 
         note_path.write_text(document, encoding="utf-8")
         return ExportResult(exporter=self.name, path=note_path)
@@ -101,14 +129,14 @@ class ObsidianExporter(Exporter):
         )
         return sanitize_filename(raw)
 
-    def _assets_rel_prefix(self) -> str:
-        """Relative path from the notes folder to the assets folder."""
+    def _assets_rel_prefix(self, notes_dir: Path, assets_dir: Path) -> str:
+        """Relative path from a note's folder to its assets folder."""
         try:
             import os
 
-            return os.path.relpath(self.assets_dir, self.notes_dir).replace("\\", "/")
+            return os.path.relpath(assets_dir, notes_dir).replace("\\", "/")
         except ValueError:
-            return str(self.assets_dir)
+            return str(assets_dir)
 
     def _frontmatter(self, item: ArchiveItem) -> str:
         fm: dict = {
@@ -124,6 +152,16 @@ class ObsidianExporter(Exporter):
                 fm["author_url"] = item.author.url
         if item.question_url:
             fm["question_url"] = item.question_url
+        # The column (专栏) an article belongs to, if any.
+        if item.column_title:
+            fm["column"] = item.column_title
+            if item.column_url:
+                fm["column_url"] = item.column_url
+        # The collection (收藏夹) / column / question this was archived from.
+        if item.batch is not None:
+            fm[item.batch.kind.value] = item.batch.title
+            if item.batch.url:
+                fm[f"{item.batch.kind.value}_url"] = item.batch.url
         if item.created:
             fm["created"] = item.created.strftime("%Y-%m-%d %H:%M:%S")
         if item.updated:
@@ -150,10 +188,11 @@ class ObsidianExporter(Exporter):
         return f"---\n{dumped}---\n"
 
     def _export_via_cli(
-        self, item: ArchiveItem, filename: str, document: str
+        self, item: ArchiveItem, filename: str, document: str, notes_dir: Path
     ) -> ExportResult:
         """Create the note through the Obsidian CLI (optional path)."""
-        rel = f"{self.config.folder}/{filename}.md"
+        # Path relative to the vault root, including any batch subdir.
+        rel = (notes_dir / f"{filename}.md").relative_to(self.vault).as_posix()
         cmd = ["obsidian", "create", f"path={rel}", f"content={document}",
                "overwrite"]
         if self.config.cli_vault_name:
@@ -161,12 +200,12 @@ class ObsidianExporter(Exporter):
         try:
             subprocess.run(cmd, check=True, capture_output=True, timeout=30)
             return ExportResult(
-                exporter=self.name, path=self.notes_dir / f"{filename}.md",
+                exporter=self.name, path=notes_dir / f"{filename}.md",
                 detail="via obsidian cli",
             )
         except (subprocess.SubprocessError, OSError) as exc:
             # Fall back to a direct file write if the CLI fails.
-            path = self.notes_dir / f"{filename}.md"
+            path = notes_dir / f"{filename}.md"
             path.write_text(document, encoding="utf-8")
             return ExportResult(
                 exporter=self.name, path=path,

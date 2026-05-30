@@ -86,16 +86,42 @@ window.MathJax = {
 class HtmlExporter(Exporter):
     name = "html"
 
-    def __init__(self, config: HtmlConfig, *, fetch: Optional[Fetcher] = None):
+    def __init__(
+        self,
+        config: HtmlConfig,
+        *,
+        fetch: Optional[Fetcher] = None,
+        subdir_override: Optional[str] = None,
+    ):
         self.config = config
         self._fetch = fetch
-        self.out_dir = Path(config.output_path)
-        self.assets_dir = self.out_dir / "assets"
+        self._subdir_override = subdir_override
+        self.base_out_dir = Path(config.output_path)
+
+    # ------------------------------------------------------------------ #
+    def _subdir_for(self, item: ArchiveItem) -> str:
+        if self._subdir_override is not None:
+            return sanitize_filename(self._subdir_override) if self._subdir_override else ""
+        if self.config.batch_subdirs and item.batch is not None:
+            return sanitize_filename(item.batch.title)
+        return ""
+
+    def _dirs_for(self, item: ArchiveItem) -> tuple[Path, Path]:
+        """Resolve (out_dir, assets_dir) for an item, applying any subdir.
+
+        Assets always live in an ``assets`` folder beside the HTML file, so a
+        note in a batch subdir gets ``<subdir>/assets`` and the relative link
+        stays ``assets/...``.
+        """
+        subdir = self._subdir_for(item)
+        out_dir = self.base_out_dir / subdir if subdir else self.base_out_dir
+        return out_dir, out_dir / "assets"
 
     def export(self, item: ArchiveItem) -> ExportResult:
-        self.out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir, assets_dir = self._dirs_for(item)
+        out_dir.mkdir(parents=True, exist_ok=True)
         filename = sanitize_filename(self._basename(item))
-        path = self.out_dir / f"{filename}.html"
+        path = out_dir / f"{filename}.html"
 
         # Render formulas to MathJax delimiters before image handling (so the
         # ztex spans aren't treated as images).
@@ -109,13 +135,13 @@ class HtmlExporter(Exporter):
             else:
                 content_html, pairs = localize_images(content_html, "assets")
                 if pairs:
-                    download_images(pairs, self.assets_dir, self._fetch)
+                    download_images(pairs, assets_dir, self._fetch)
 
         document = _TEMPLATE.format(
             title=html_lib.escape(item.title),
             meta=self._meta_html(item),
             ai=self._ai_html(item),
-            title_image=self._title_image_html(item),
+            title_image=self._title_image_html(item, assets_dir),
             content=content_html,
             url=html_lib.escape(item.url),
             mathjax=_MATHJAX if has_formulas else "",
@@ -124,7 +150,7 @@ class HtmlExporter(Exporter):
         return ExportResult(exporter=self.name, path=path)
 
     # ------------------------------------------------------------------ #
-    def _title_image_html(self, item: ArchiveItem) -> str:
+    def _title_image_html(self, item: ArchiveItem, assets_dir: Path) -> str:
         """Render the article title image as a banner, localized if possible."""
         if not item.title_image:
             return ""
@@ -140,7 +166,7 @@ class HtmlExporter(Exporter):
                     f'<img src="{item.title_image}">', "assets"
                 )
                 if pairs:
-                    saved = download_images(pairs, self.assets_dir, self._fetch)
+                    saved = download_images(pairs, assets_dir, self._fetch)
                     fname = saved.get(pairs[0][0], pairs[0][1])
                     src = f"assets/{fname}"
         return (

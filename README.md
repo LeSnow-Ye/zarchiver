@@ -49,9 +49,9 @@ export DEEPSEEK_API_KEY=sk-...        # or set ai.api_key in config.toml
 # 3. Log in to Zhihu once (opens a browser window; cookies are saved)
 uv run zarchiver login
 
-# 4. Archive
+# 4. Archive (single or batch — same command, URL kind is auto-detected)
 uv run zarchiver archive https://zhuanlan.zhihu.com/p/35562420
-uv run zarchiver collection https://www.zhihu.com/collection/<id>
+uv run zarchiver archive https://www.zhihu.com/collection/<id>
 uv run zarchiver status
 ```
 

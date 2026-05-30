@@ -48,6 +48,29 @@ class AIResult:
         return not (self.summary or self.tags or self.category)
 
 
+class BatchKind(str, Enum):
+    """The kind of batch an item was archived as part of."""
+
+    COLLECTION = "collection"
+    COLUMN = "column"
+    QUESTION = "question"
+
+
+@dataclass(slots=True)
+class BatchInfo:
+    """Context for an item archived as part of a batch.
+
+    Set by a source when iterating a collection/column/question, and used by
+    exporters to choose a per-batch subdirectory and to record which
+    collection/column/question an item came from.
+    """
+
+    kind: BatchKind
+    title: str
+    url: str
+    id: Optional[str] = None
+
+
 @dataclass(slots=True)
 class ArchiveItem:
     """A single archivable unit of content, normalized across platforms.
@@ -63,6 +86,11 @@ class ArchiveItem:
         author: Original author.
         created/updated: Publication and last-edit timestamps (tz-aware).
         question_title/question_url: Context for answers.
+        title_image: Article cover image URL, if any.
+        column_title/column_url: The column (专栏) an article belongs to, if any.
+            Intrinsic to the content.
+        batch: When archived as part of a collection/column/question, the batch
+            context (drives subdir placement and collection metadata).
         voteup_count/comment_count: Engagement metrics, if known.
         topics: Platform-native topic/tag strings.
         ai: Populated by the AI module after fetch.
@@ -81,6 +109,9 @@ class ArchiveItem:
     question_title: Optional[str] = None
     question_url: Optional[str] = None
     title_image: Optional[str] = None
+    column_title: Optional[str] = None
+    column_url: Optional[str] = None
+    batch: Optional["BatchInfo"] = None
     voteup_count: Optional[int] = None
     comment_count: Optional[int] = None
     topics: list[str] = field(default_factory=list)

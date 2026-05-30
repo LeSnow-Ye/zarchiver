@@ -49,7 +49,7 @@ def _load_config(
     return cfg
 
 
-def _build_pipeline(cfg: Config, source: ZhihuSource):
+def _build_pipeline(cfg: Config, source: ZhihuSource, subdir: Optional[str] = None):
     from zarchiver.store import StateStore
 
     store = StateStore(cfg.archive.db_path)
@@ -57,9 +57,13 @@ def _build_pipeline(cfg: Config, source: ZhihuSource):
 
     exporters = []
     if cfg.obsidian.enabled:
-        exporters.append(ObsidianExporter(cfg.obsidian, fetch=fetch))
+        exporters.append(
+            ObsidianExporter(cfg.obsidian, fetch=fetch, subdir_override=subdir)
+        )
     if cfg.html.enabled:
-        exporters.append(HtmlExporter(cfg.html, fetch=fetch))
+        exporters.append(
+            HtmlExporter(cfg.html, fetch=fetch, subdir_override=subdir)
+        )
     if not exporters:
         console.print("[yellow]Warning: no exporters enabled in config.[/yellow]")
 
@@ -145,18 +149,36 @@ def login(
 
 @app.command()
 def archive(
-    url: str = typer.Argument(..., help="Zhihu answer or article URL"),
+    url: str = typer.Argument(
+        ..., help="Zhihu URL: answer, article, collection, column, or question"
+    ),
     config: Optional[str] = typer.Option(None, "--config", "-c"),
     no_ai: bool = typer.Option(False, "--no-ai", help="Disable AI summarization"),
     on_duplicate: Optional[str] = typer.Option(
         None, "--on-duplicate", help="skip | update | ask"
     ),
+    limit: int = typer.Option(
+        0, "--limit", "-n", help="Max items for batch URLs (0 = all)"
+    ),
+    subdir: Optional[str] = typer.Option(
+        None,
+        "--subdir",
+        help="Place output in this subdirectory (overrides the batch-named "
+        "default; use '' to force no subdir)",
+    ),
 ):
-    """Archive a single answer/article, or a batch URL if one is given."""
+    """Archive a single answer/article, or a batch (collection/column/question).
+
+    The kind of URL is auto-detected: single answers and articles are archived
+    directly; collection, column, and question URLs are batch-archived, each
+    item going into a subdirectory named after the batch by default.
+    """
     cfg = _load_config(config, no_ai, on_duplicate)
+    if limit:
+        cfg.browser.max_items = limit
     target = classify(url)
     source = ZhihuSource(cfg)
-    pipeline, store = _build_pipeline(cfg, source)
+    pipeline, store = _build_pipeline(cfg, source, subdir=subdir)
     try:
         if target.is_batch:
             console.print(f"Batch ({target.kind.value}): {url}")
@@ -167,57 +189,6 @@ def archive(
     finally:
         source.close()
         store.close()
-
-
-def _batch_command(url: str, config, no_ai, on_duplicate, limit):
-    cfg = _load_config(config, no_ai, on_duplicate)
-    if limit:
-        cfg.browser.max_items = limit
-    source = ZhihuSource(cfg)
-    pipeline, store = _build_pipeline(cfg, source)
-    try:
-        console.print(f"Archiving batch: {url}")
-        outcomes = pipeline.archive_batch(url)
-        _report(outcomes)
-    finally:
-        source.close()
-        store.close()
-
-
-@app.command()
-def collection(
-    url: str = typer.Argument(..., help="Zhihu favorites collection URL"),
-    config: Optional[str] = typer.Option(None, "--config", "-c"),
-    no_ai: bool = typer.Option(False, "--no-ai"),
-    on_duplicate: Optional[str] = typer.Option(None, "--on-duplicate"),
-    limit: int = typer.Option(0, "--limit", "-n", help="Max items (0 = all)"),
-):
-    """Archive all items in a favorites collection (收藏夹)."""
-    _batch_command(url, config, no_ai, on_duplicate, limit)
-
-
-@app.command()
-def column(
-    url: str = typer.Argument(..., help="Zhihu column URL"),
-    config: Optional[str] = typer.Option(None, "--config", "-c"),
-    no_ai: bool = typer.Option(False, "--no-ai"),
-    on_duplicate: Optional[str] = typer.Option(None, "--on-duplicate"),
-    limit: int = typer.Option(0, "--limit", "-n", help="Max items (0 = all)"),
-):
-    """Archive all articles in a column (专栏)."""
-    _batch_command(url, config, no_ai, on_duplicate, limit)
-
-
-@app.command()
-def question(
-    url: str = typer.Argument(..., help="Zhihu question URL"),
-    config: Optional[str] = typer.Option(None, "--config", "-c"),
-    no_ai: bool = typer.Option(False, "--no-ai"),
-    on_duplicate: Optional[str] = typer.Option(None, "--on-duplicate"),
-    limit: int = typer.Option(0, "--limit", "-n", help="Max items (0 = all)"),
-):
-    """Archive answers under a question (loads as many as scroll reveals)."""
-    _batch_command(url, config, no_ai, on_duplicate, limit)
 
 
 @app.command()

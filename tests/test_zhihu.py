@@ -200,3 +200,68 @@ def test_parse_article_references_fixture():
     assert 'class="reference-list"' in item.content_html
     assert item.content_html.count('class="ref-marker"') >= 5
 
+
+# ---------------------------------------------------------------------- #
+# Column metadata + batch title extraction
+# ---------------------------------------------------------------------- #
+def test_parse_article_column_metadata():
+    data = {
+        "initialState": {
+            "entities": {
+                "articles": {
+                    "5": {
+                        "id": "5",
+                        "title": "T",
+                        "content": "<p>x</p>",
+                        "column": {
+                            "title": "我的专栏",
+                            "url": "https://zhuanlan.zhihu.com/c",
+                        },
+                    }
+                }
+            }
+        }
+    }
+    item = P.parse_article(data, "5")
+    assert item.column_title == "我的专栏"
+    assert item.column_url == "https://zhuanlan.zhihu.com/c"
+
+
+def test_parse_article_no_column():
+    data = {
+        "initialState": {
+            "entities": {
+                "articles": {"5": {"id": "5", "title": "T", "content": "<p>x</p>"}}
+            }
+        }
+    }
+    item = P.parse_article(data, "5")
+    assert item.column_title is None
+    assert item.column_url is None
+
+
+def test_batch_title_by_kind():
+    data = {
+        "initialState": {
+            "entities": {
+                "columns": {"abc": {"title": "专栏A"}},
+                "favlists": {"123": {"title": "收藏夹B"}},
+                "questions": {"99": {"title": "问题C"}},
+            }
+        }
+    }
+    assert P.batch_title(data, "column", "abc") == "专栏A"
+    assert P.batch_title(data, "collection", "123") == "收藏夹B"
+    assert P.batch_title(data, "question", "99") == "问题C"
+
+
+def test_batch_title_fallback_single_entity():
+    data = {"initialState": {"entities": {"favlists": {"7": {"title": "唯一收藏夹"}}}}}
+    # id not matching, but only one favlist present
+    assert P.batch_title(data, "collection", "999") == "唯一收藏夹"
+
+
+def test_batch_title_missing():
+    assert P.batch_title(None, "column", "x") is None
+    assert P.batch_title({"initialState": {"entities": {}}}, "column", "x") is None
+

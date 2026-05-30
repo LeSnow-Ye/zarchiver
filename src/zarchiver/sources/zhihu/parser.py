@@ -258,6 +258,8 @@ def parse_article(data: dict, article_id: str) -> ArchiveItem:
             raise SourceError(f"article {article_id} not found in page data")
 
     column = raw.get("column") or {}
+    col_title = column.get("title") if isinstance(column, dict) else None
+    col_url = column.get("url") if isinstance(column, dict) else None
     item = ArchiveItem(
         platform=PLATFORM,
         content_type=ContentType.ARTICLE,
@@ -269,6 +271,8 @@ def parse_article(data: dict, article_id: str) -> ArchiveItem:
         created=ArchiveItem.epoch_to_dt(raw.get("created")),
         updated=ArchiveItem.epoch_to_dt(raw.get("updated")),
         title_image=_clean_image_url(raw.get("titleImage")),
+        column_title=col_title or None,
+        column_url=col_url or None,
         voteup_count=raw.get("voteupCount"),
         comment_count=raw.get("commentCount"),
         topics=_topics(raw),
@@ -332,6 +336,36 @@ def answer_ids_from_data(data: dict) -> list[str]:
     """Collect answer ids present in the embedded entities (current page)."""
     answers = _entities(data).get("answers", {})
     return [str(k) for k in answers.keys()]
+
+
+def batch_title(data: Optional[dict], kind: str, batch_id: Optional[str]) -> Optional[str]:
+    """Extract a human title for a batch (collection/column/question) page.
+
+    Looks up the matching entity by id, falling back to the only entity of that
+    type if the id isn't keyed directly. Returns None if nothing is found, so
+    callers can fall back to the document title or id.
+    """
+    if not data:
+        return None
+    ents = _entities(data)
+    entity_map = {
+        "collection": "favlists",
+        "column": "columns",
+        "question": "questions",
+    }
+    bucket = ents.get(entity_map.get(kind, ""), {}) or {}
+    if not bucket:
+        return None
+    obj = None
+    if batch_id and str(batch_id) in bucket:
+        obj = bucket[str(batch_id)]
+    elif len(bucket) == 1:
+        obj = next(iter(bucket.values()))
+    if not isinstance(obj, dict):
+        return None
+    title = obj.get("title")
+    return title.strip() if isinstance(title, str) and title.strip() else None
+
 
 
 # ---------------------------------------------------------------------- #

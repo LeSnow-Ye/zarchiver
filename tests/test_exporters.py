@@ -9,7 +9,7 @@ from zarchiver.config import HtmlConfig, ObsidianConfig
 from zarchiver.exporters.assets import localize_images
 from zarchiver.exporters.html import HtmlExporter
 from zarchiver.exporters.obsidian import ObsidianExporter, sanitize_filename
-from zarchiver.models import AIResult, ArchiveItem, Author, ContentType
+from zarchiver.models import AIResult, ArchiveItem, Author, BatchInfo, BatchKind, ContentType
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -202,4 +202,104 @@ def test_html_title_image_banner(tmp_path):
     doc = HtmlExporter(cfg).export(item).path.read_text(encoding="utf-8")
     assert 'class="title-image"' in doc
     assert "https://pic1.zhimg.com/title.jpg" in doc
+
+
+# ---------------------------------------------------------------------- #
+# Column / collection metadata + batch subdirectories
+# ---------------------------------------------------------------------- #
+def _batch_item() -> ArchiveItem:
+    item = _sample_item()
+    item.column_title = "我的专栏"
+    item.column_url = "https://zhuanlan.zhihu.com/mycol"
+    item.batch = BatchInfo(
+        kind=BatchKind.COLLECTION,
+        title="收藏夹: 好文/精选",
+        url="https://www.zhihu.com/collection/123",
+        id="123",
+    )
+    return item
+
+
+def test_obsidian_records_column_and_collection(tmp_path):
+    cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=False)
+    fm = (
+        ObsidianExporter(cfg)
+        .export(_batch_item())
+        .path.read_text(encoding="utf-8")
+    )
+    meta = yaml.safe_load(fm.split("---\n", 2)[1])
+    assert meta["column"] == "我的专栏"
+    assert meta["column_url"] == "https://zhuanlan.zhihu.com/mycol"
+    assert meta["collection"] == "收藏夹: 好文/精选"
+    assert meta["collection_url"] == "https://www.zhihu.com/collection/123"
+
+
+def test_obsidian_batch_subdir_placement(tmp_path):
+    cfg = ObsidianConfig(
+        vault_path=str(tmp_path / "v"),
+        folder="Zhihu",
+        assets_folder="Zhihu/assets",
+        download_images=False,
+        batch_subdirs=True,
+    )
+    result = ObsidianExporter(cfg).export(_batch_item())
+    # Subdir is the sanitized batch title (slash removed).
+    parent = result.path.parent
+    assert parent.name == "收藏夹 好文精选"  # ":" and "/" stripped
+    assert parent.parent == tmp_path / "v" / "Zhihu"
+
+
+def test_obsidian_batch_subdirs_disabled(tmp_path):
+    cfg = ObsidianConfig(
+        vault_path=str(tmp_path / "v"),
+        folder="Zhihu",
+        download_images=False,
+        batch_subdirs=False,
+    )
+    result = ObsidianExporter(cfg).export(_batch_item())
+    assert result.path.parent == tmp_path / "v" / "Zhihu"  # no subdir
+
+
+def test_subdir_override_forces_dir(tmp_path):
+    cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=False)
+    item = _sample_item()  # no batch
+    result = ObsidianExporter(cfg, subdir_override="custom").export(item)
+    assert result.path.parent.name == "custom"
+
+
+def test_subdir_override_empty_disables(tmp_path):
+    cfg = ObsidianConfig(
+        vault_path=str(tmp_path / "v"), folder="Zhihu", download_images=False
+    )
+    result = ObsidianExporter(cfg, subdir_override="").export(_batch_item())
+    assert result.path.parent == tmp_path / "v" / "Zhihu"
+
+
+def test_obsidian_batch_assets_in_subdir(tmp_path):
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+        "890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+    )
+    cfg = ObsidianConfig(
+        vault_path=str(tmp_path / "v"),
+        folder="Zhihu",
+        assets_folder="Zhihu/assets",
+        download_images=True,
+        batch_subdirs=True,
+    )
+    result = ObsidianExporter(cfg, fetch=lambda u: png).export(_batch_item())
+    # Assets land under the batch subdir, and the note links to them relatively.
+    subdir = "收藏夹 好文精选"
+    assets = tmp_path / "v" / "Zhihu" / "assets" / subdir
+    assert list(assets.glob("*")), "expected image under batch assets subdir"
+    text = result.path.read_text(encoding="utf-8")
+    assert "assets/" in text and ".jpg" in text
+
+
+def test_html_batch_subdir_placement(tmp_path):
+    cfg = HtmlConfig(output_path=str(tmp_path / "h"), batch_subdirs=True)
+    result = HtmlExporter(cfg).export(_batch_item())
+    assert result.path.parent.name == "收藏夹 好文精选"
+    assert result.path.parent.parent == tmp_path / "h"
+
 
