@@ -95,3 +95,25 @@ def test_parse_answer_fixture():
 
 def test_extract_initial_data_missing():
     assert P.extract_initial_data("<html><body>no script</body></html>") is None
+
+
+def test_clean_content_unwraps_redirect():
+    html = (
+        '<a href="https://link.zhihu.com/?target=https%3A//example.com/x">'
+        "link</a>"
+    )
+    out = P.clean_content_html(html)
+    assert "example.com/x" in out
+    assert "link.zhihu.com" not in out
+
+
+def test_clean_content_video_box():
+    html = (
+        '<a class="video-box" '
+        'href="https://link.zhihu.com/?target=https%3A//www.zhihu.com/video/1" '
+        'data-poster="https://pic.zhimg.com/p.jpg"></a>'
+    )
+    out = P.clean_content_html(html)
+    assert "🎬 视频" in out
+    assert "pic.zhimg.com/p.jpg" in out
+    assert "www.zhihu.com/video/1" in out

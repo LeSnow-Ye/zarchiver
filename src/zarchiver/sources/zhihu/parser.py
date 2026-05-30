@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Optional
+from urllib.parse import parse_qs, unquote, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -21,6 +22,62 @@ from zarchiver.sources.base import SourceError
 from zarchiver.sources.zhihu import urls as zurls
 
 PLATFORM = "zhihu"
+
+
+# ---------------------------------------------------------------------- #
+# Content normalization (Zhihu-specific HTML quirks)
+# ---------------------------------------------------------------------- #
+def clean_content_html(html: str) -> str:
+    """Normalize Zhihu's content HTML before it reaches generic exporters.
+
+    * Unwrap ``link.zhihu.com/?target=<encoded>`` redirects to the real URL.
+    * Turn ``<a class="video-box">`` embeds into a readable poster + label.
+    * Drop ``<noscript>`` duplicates.
+    """
+    if not html:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+
+    for ns in soup.find_all("noscript"):
+        ns.decompose()
+
+    # Video boxes: replace with poster image + a labelled link.
+    for box in soup.select("a.video-box"):
+        href = box.get("href", "")
+        real = _unwrap_redirect(href)
+        poster = box.get("data-poster")
+        box.attrs = {"href": real} if real else {}
+        box.clear()
+        box.string = ""
+        new_content = []
+        if poster:
+            img = soup.new_tag("img", src=poster)
+            new_content.append(img)
+        label = soup.new_tag("span")
+        label.string = "🎬 视频"
+        new_content.append(label)
+        for node in new_content:
+            box.append(node)
+
+    # Unwrap remaining link.zhihu.com redirects.
+    for a in soup.find_all("a", href=True):
+        real = _unwrap_redirect(a["href"])
+        if real:
+            a["href"] = real
+
+    return str(soup)
+
+
+def _unwrap_redirect(href: str) -> Optional[str]:
+    """Return the real target of a link.zhihu.com redirect, else None."""
+    if not href or "link.zhihu.com" not in href:
+        return None
+    try:
+        qs = parse_qs(urlparse(href).query)
+        target = qs.get("target", [None])[0]
+        return unquote(target) if target else None
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------- #
@@ -89,7 +146,7 @@ def parse_article(data: dict, article_id: str) -> ArchiveItem:
         source_id=str(raw.get("id") or article_id),
         url=zurls.article_url(str(raw.get("id") or article_id)),
         title=raw.get("title") or "(untitled)",
-        content_html=raw.get("content") or "",
+        content_html=clean_content_html(raw.get("content") or ""),
         author=_make_author(raw.get("author")),
         created=ArchiveItem.epoch_to_dt(raw.get("created")),
         updated=ArchiveItem.epoch_to_dt(raw.get("updated")),
@@ -127,7 +184,7 @@ def parse_answer(
             f"https://www.zhihu.com/answer/{raw.get('id') or answer_id}",
         # An answer's "title" is its parent question — most useful for filing.
         title=q_title,
-        content_html=raw.get("content") or "",
+        content_html=clean_content_html(raw.get("content") or ""),
         author=_make_author(raw.get("author")),
         created=ArchiveItem.epoch_to_dt(raw.get("createdTime") or raw.get("created")),
         updated=ArchiveItem.epoch_to_dt(raw.get("updatedTime") or raw.get("updated")),
