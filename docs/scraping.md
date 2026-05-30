@@ -46,6 +46,11 @@ Every Zhihu page embeds a complete JSON state document in
   `updated`, `voteupCount`, `commentCount`, `excerpt`, `column`, `topics`
 - `entities.answers[id]` — same shape plus `question`
 - `entities.questions[id]` — question metadata
+- `entities.pins[id]` — a 想法 (pin): `content` is an ordered list of blocks
+  (`type: "text"` carries HTML in `content`; `type: "image"` carries `url` /
+  `originalUrl` / `watermarkUrl`), `author` is a urlToken string into
+  `entities.users` (not embedded inline), and there is no real title — the
+  parser synthesizes one from `excerptTitle`. See `parser.parse_pin`.
 
 This is far more robust than scraping rendered DOM (class names change often).
 zarchiver only falls back to DOM parsing when the embedded data is missing.

@@ -1,7 +1,7 @@
 # zarchiver
 
-Archive Zhihu content (answers and articles) to your local machine as
-**Obsidian markdown** and **standalone HTML**, with **AI-generated summaries,
+Archive Zhihu content (answers, articles, and pins/想法) to your local machine
+as **Obsidian markdown** and **standalone HTML**, with **AI-generated summaries,
 tags, and categories**.
 
 zarchiver is built modular-first: a platform-neutral core pipeline
@@ -11,9 +11,9 @@ core.
 
 ## Status
 
-Working: single + batch archiving (answers, articles, collections, columns,
-questions), Obsidian + HTML export with image download, AI summaries/tags via
-DeepSeek, and SQLite dedup. See [docs/architecture.md](docs/architecture.md)
+Working: single + batch archiving (answers, articles, pins, collections,
+columns, questions), Obsidian + HTML export with image download, AI
+summaries/tags via DeepSeek, and SQLite dedup. See [docs/architecture.md](docs/architecture.md)
 for the design, [docs/usage.md](docs/usage.md) for commands,
 [docs/configuration.md](docs/configuration.md) for config, and
 [docs/scraping.md](docs/scraping.md) for the scraping approach.

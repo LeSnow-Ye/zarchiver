@@ -25,6 +25,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
         ("https://zhuanlan.zhihu.com/p/35562420", K.ARTICLE),
         ("https://www.zhihu.com/question/19550225/answer/123", K.ANSWER),
         ("https://www.zhihu.com/answer/987", K.ANSWER),
+        ("https://www.zhihu.com/pin/2000653466067043281", K.PIN),
         ("https://www.zhihu.com/question/19550225", K.QUESTION),
         ("https://www.zhihu.com/collection/123456", K.COLLECTION),
         ("https://www.zhihu.com/column/c_98765", K.COLUMN),
@@ -41,6 +42,13 @@ def test_classify_extracts_ids():
     assert t.answer_id == "12345678"
     assert t.question_id == "19550225"
     assert not t.is_batch
+
+
+def test_classify_pin_extracts_id():
+    t = u.classify("https://www.zhihu.com/pin/2000653466067043281")
+    assert t.kind == K.PIN
+    assert t.pin_id == "2000653466067043281"
+    assert not t.is_batch  # a pin is a single item, not a batch
 
 
 def test_is_zhihu_url():
@@ -121,6 +129,113 @@ def test_parse_answer_fixture():
     assert item.title  # question title
     assert item.question_url
     assert len(item.content_html) > 0
+
+
+# ---------------------------------------------------------------------- #
+# Pin (想法)
+# ---------------------------------------------------------------------- #
+def _pin_data():
+    """A minimal pin payload: one text block, one image, an author user."""
+    return {
+        "initialState": {
+            "entities": {
+                "pins": {
+                    "42": {
+                        "id": "42",
+                        "type": "pin",
+                        "author": "zhang-san",
+                        "created": 1700000000,
+                        "updated": 1700000100,
+                        "likeCount": 7,
+                        "commentCount": 2,
+                        "excerptTitle": "今天聊聊归档 | 一些零碎的想法",
+                        "topics": [{"name": "归档"}],
+                        "content": [
+                            {"type": "text", "content": "<p>正文一段。</p>"},
+                            {
+                                "type": "image",
+                                "url": "https://pic.zhimg.com/thumb_720w.jpg",
+                                "originalUrl": "https://pic.zhimg.com/full.png",
+                                "watermarkUrl": "https://pic.zhimg.com/wm.png",
+                            },
+                        ],
+                    }
+                },
+                "users": {
+                    "zhang-san": {
+                        "name": "张三",
+                        "urlToken": "zhang-san",
+                        "url": "/people/abc123",
+                        "id": "abc123",
+                    }
+                },
+            }
+        }
+    }
+
+
+def test_parse_pin_basic():
+    item = P.parse_pin(_pin_data(), "42")
+    assert item.content_type == ContentType.PIN
+    assert item.source_id == "42"
+    assert item.url == "https://www.zhihu.com/pin/42"
+    assert item.key == "zhihu:pin:42"
+    # Author resolved from the users entity by urlToken.
+    assert item.author and item.author.name == "张三"
+    assert item.author.url == "https://www.zhihu.com/people/abc123"
+    # Engagement + topics carried over.
+    assert item.voteup_count == 7
+    assert item.comment_count == 2
+    assert item.topics == ["归档"]
+
+
+def test_parse_pin_title_synthesized_from_excerpt():
+    # A pin has no real title: take the first segment of the excerpt.
+    item = P.parse_pin(_pin_data(), "42")
+    assert item.title == "今天聊聊归档"  # split on the | separator
+
+
+def test_parse_pin_image_uses_original_url():
+    # Image blocks become <img> tags pointing at the full-res original.
+    item = P.parse_pin(_pin_data(), "42")
+    assert "pic.zhimg.com/full.png" in item.content_html
+    assert "正文一段" in item.content_html
+    assert item.content_html.count("<img") == 1
+
+
+def test_parse_pin_only_one_entity():
+    # Id not matching, but a single pin present → use it.
+    data = _pin_data()
+    item = P.parse_pin(data, "999")
+    assert item.source_id == "42"
+
+
+def test_parse_pin_missing_raises():
+    import pytest as _pytest
+
+    from zarchiver.sources.base import SourceError
+
+    empty = {"initialState": {"entities": {"pins": {}}}}
+    with _pytest.raises(SourceError):
+        P.parse_pin(empty, "42")
+
+
+@pytest.mark.skipif(
+    not (FIXTURES / "pin_2000653466067043281.html").is_file(),
+    reason="pin fixture not captured",
+)
+def test_parse_pin_fixture():
+    html = (FIXTURES / "pin_2000653466067043281.html").read_text(encoding="utf-8")
+    data = P.extract_initial_data(html)
+    assert data is not None
+    item = P.parse_pin(data, "2000653466067043281")
+    assert item.content_type == ContentType.PIN
+    assert item.title  # synthesized from the excerpt
+    assert item.author and item.author.name
+    # The pin embeds 6 images, all rendered as <img> tags.
+    assert item.content_html.count("<img") == 6
+    # Inline link.zhihu.com redirect is unwrapped during cleaning.
+    assert "link.zhihu.com" not in item.content_html
 
 
 def test_extract_initial_data_missing():

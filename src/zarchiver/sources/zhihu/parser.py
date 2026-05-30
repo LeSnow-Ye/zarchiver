@@ -283,6 +283,123 @@ def parse_article(data: dict, article_id: str) -> ArchiveItem:
 
 
 # ---------------------------------------------------------------------- #
+# Pin (想法) — a short post: ordered text + image blocks, no real title.
+# ---------------------------------------------------------------------- #
+def parse_pin(data: dict, pin_id: str) -> ArchiveItem:
+    pins = _entities(data).get("pins", {})
+    raw = pins.get(str(pin_id))
+    if not raw:
+        if len(pins) == 1:
+            raw = next(iter(pins.values()))
+        else:
+            raise SourceError(f"pin {pin_id} not found in page data")
+
+    pid = str(raw.get("id") or pin_id)
+    # A pin's author is stored as a urlToken string referencing the users
+    # entity (unlike articles/answers, which embed the author inline).
+    author = _resolve_pin_author(data, raw.get("author"))
+    content_html = _pin_content_html(raw)
+    title = _pin_title(raw, content_html)
+    item = ArchiveItem(
+        platform=PLATFORM,
+        content_type=ContentType.PIN,
+        source_id=pid,
+        url=zurls.pin_url(pid),
+        title=title,
+        content_html=clean_content_html(content_html),
+        author=author,
+        created=ArchiveItem.epoch_to_dt(raw.get("created")),
+        updated=ArchiveItem.epoch_to_dt(raw.get("updated")),
+        voteup_count=raw.get("likeCount"),
+        comment_count=raw.get("commentCount"),
+        topics=_topics(raw),
+        excerpt=_strip_html(raw.get("excerptTitle") or "")[:200],
+    )
+    return item
+
+
+def _resolve_pin_author(data: dict, token) -> Optional[Author]:
+    """Resolve a pin's author from the ``users`` entity by urlToken/id."""
+    if isinstance(token, dict):
+        return _make_author(token)
+    if not isinstance(token, str) or not token:
+        return None
+    users = _entities(data).get("users", {})
+    user = users.get(token)
+    if user is None:
+        # Fall back to matching by urlToken across the entity map.
+        for u in users.values():
+            if isinstance(u, dict) and u.get("urlToken") == token:
+                user = u
+                break
+    if isinstance(user, dict):
+        return _make_author(user)
+    # No user record: keep the token as a best-effort name.
+    return Author(name=token)
+
+
+def _pin_content_html(raw: dict) -> str:
+    """Assemble a pin's body HTML from its ordered ``content`` blocks.
+
+    Text blocks carry HTML directly; image blocks carry only URLs, so we
+    synthesize ``<img>`` tags pointing at the full-resolution ``originalUrl``
+    (falling back to the watermarked or thumbnail URL). Blocks are concatenated
+    in order, so text and images interleave as the author arranged them.
+    """
+    blocks = raw.get("content")
+    if not isinstance(blocks, list):
+        # Older/alternate payloads expose a single ``contentHtml`` string.
+        return raw.get("contentHtml") or ""
+    parts: list[str] = []
+    for blk in blocks:
+        if not isinstance(blk, dict):
+            continue
+        btype = blk.get("type")
+        if btype == "image":
+            src = (
+                blk.get("originalUrl")
+                or blk.get("watermarkUrl")
+                or blk.get("url")
+            )
+            if src:
+                parts.append(f'<p><img src="{src}"/></p>')
+        else:
+            # Text (and any unknown textual block): use its HTML content.
+            html = blk.get("content") or blk.get("ownText") or ""
+            if html:
+                parts.append(f"<div>{html}</div>")
+    if not parts:
+        return raw.get("contentHtml") or ""
+    return "".join(parts)
+
+
+def _pin_title(raw: dict, content_html: str) -> str:
+    """Synthesize a display title for a titleless pin.
+
+    Uses the first line of the excerpt (or body) up to a separator, trimmed to
+    a sane length — enough to make a meaningful filename and note heading.
+    """
+    source = raw.get("excerptTitle") or content_html or ""
+    text = _strip_html(source).strip()
+    if not text:
+        return "想法"
+    # First sentence/line, split on common separators and pipes.
+    first = re.split(r"[\n|｜]|<br", text, maxsplit=1)[0].strip()
+    first = first or text
+    if len(first) > 60:
+        first = first[:60].rstrip() + "…"
+    return first or "想法"
+
+
+def _strip_html(html: str) -> str:
+    """Plain text of an HTML fragment, with <br> treated as spaces."""
+    if not html:
+        return ""
+    soup = BeautifulSoup(html.replace("<br>", " ").replace("<br/>", " "), "html.parser")
+    return soup.get_text(" ", strip=True)
+
+
+# ---------------------------------------------------------------------- #
 # Answer
 # ---------------------------------------------------------------------- #
 def parse_answer(

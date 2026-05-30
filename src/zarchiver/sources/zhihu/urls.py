@@ -9,6 +9,7 @@ Recognized shapes::
     answer     https://www.zhihu.com/question/<qid>/answer/<aid>
                https://www.zhihu.com/answer/<aid>
     article    https://zhuanlan.zhihu.com/p/<pid>
+    pin        https://www.zhihu.com/pin/<pid>
     question   https://www.zhihu.com/question/<qid>
     collection https://www.zhihu.com/collection/<cid>
     column     https://www.zhihu.com/column/<slug>
@@ -27,6 +28,7 @@ from urllib.parse import urlparse
 class ZhihuKind(str, Enum):
     ANSWER = "answer"
     ARTICLE = "article"
+    PIN = "pin"  # a "想法" (short post with text + images)
     QUESTION = "question"  # batch: all answers of a question
     COLLECTION = "collection"  # batch: a favorites folder
     COLUMN = "column"  # batch: a column's articles
@@ -40,6 +42,7 @@ class ZhihuTarget:
     answer_id: str | None = None
     question_id: str | None = None
     article_id: str | None = None
+    pin_id: str | None = None
     collection_id: str | None = None
     column_id: str | None = None
     raw_url: str = ""
@@ -61,6 +64,7 @@ _PATTERNS: list[tuple[ZhihuKind, re.Pattern[str]]] = [
     ),
     (ZhihuKind.ANSWER, re.compile(r"/answer/(?P<aid>\d+)")),
     (ZhihuKind.ARTICLE, re.compile(r"/p/(?P<pid>\d+)")),
+    (ZhihuKind.PIN, re.compile(r"/pin/(?P<pinid>\d+)")),
     (ZhihuKind.COLLECTION, re.compile(r"/collection/(?P<cid>\d+)")),
     (ZhihuKind.QUESTION, re.compile(r"/question/(?P<qid>\d+)")),
     (ZhihuKind.COLUMN, re.compile(r"/column/(?P<slug>[\w-]+)")),
@@ -100,6 +104,8 @@ def classify(url: str) -> ZhihuTarget:
             )
         if kind == ZhihuKind.ARTICLE:
             return ZhihuTarget(kind=kind, article_id=g["pid"], raw_url=url)
+        if kind == ZhihuKind.PIN:
+            return ZhihuTarget(kind=kind, pin_id=g["pinid"], raw_url=url)
         if kind == ZhihuKind.COLLECTION:
             return ZhihuTarget(kind=kind, collection_id=g["cid"], raw_url=url)
         if kind == ZhihuKind.QUESTION:
@@ -112,6 +118,10 @@ def classify(url: str) -> ZhihuTarget:
 
 def article_url(article_id: str) -> str:
     return f"https://zhuanlan.zhihu.com/p/{article_id}"
+
+
+def pin_url(pin_id: str) -> str:
+    return f"https://www.zhihu.com/pin/{pin_id}"
 
 
 def answer_url(question_id: str, answer_id: str) -> str:

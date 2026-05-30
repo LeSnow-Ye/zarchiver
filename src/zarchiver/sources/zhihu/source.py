@@ -45,6 +45,8 @@ class ZhihuSource(Source):
             return self._fetch_article(target.article_id, url)
         if target.kind == ZhihuKind.ANSWER:
             return self._fetch_answer(target.answer_id, target.question_id, url)
+        if target.kind == ZhihuKind.PIN:
+            return self._fetch_pin(target.pin_id, url)
         if target.is_batch:
             raise SourceError(
                 f"{url} is a batch ({target.kind.value}); use fetch_batch()"
@@ -59,7 +61,7 @@ class ZhihuSource(Source):
             yield from self._fetch_column(target)
         elif target.kind == ZhihuKind.QUESTION:
             yield from self._fetch_question_answers(target)
-        elif target.kind in (ZhihuKind.ARTICLE, ZhihuKind.ANSWER):
+        elif target.kind in (ZhihuKind.ARTICLE, ZhihuKind.ANSWER, ZhihuKind.PIN):
             # A single-item URL passed to batch mode: yield the one item.
             yield self.fetch(url)
         else:
@@ -128,6 +130,21 @@ class ZhihuSource(Source):
             item.source_id,
             item.author.name if item.author else "?",
             len(item.content_html),
+        )
+        return item
+
+    def _fetch_pin(self, pin_id: Optional[str], url: str) -> ArchiveItem:
+        html = self._page_html(url)
+        data = P.extract_initial_data(html)
+        if not data:
+            raise SourceError(f"no embedded data for pin at {url}")
+        item = P.parse_pin(data, pin_id or "")
+        log.debug(
+            "parsed pin %s by %s (%d chars, %d images)",
+            item.source_id,
+            item.author.name if item.author else "?",
+            len(item.content_html),
+            item.content_html.count("<img"),
         )
         return item
 
@@ -241,9 +258,10 @@ class ZhihuSource(Source):
         except Exception:
             return None
 
-    # Item links found inside a collection page (articles + answers).
+    # Item links found inside a collection page (articles + answers + pins).
     _COLLECTION_LINK_RE = (
-        r"(zhuanlan\.zhihu\.com/p/\d+|/question/\d+/answer/\d+|/answer/\d+)"
+        r"(zhuanlan\.zhihu\.com/p/\d+|/question/\d+/answer/\d+|/answer/\d+"
+        r"|/pin/\d+)"
     )
 
     def _fetch_collection(self, target: ZhihuTarget) -> Iterator[ArchiveItem]:

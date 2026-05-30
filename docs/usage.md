@@ -59,7 +59,7 @@ credentials, then press Enter in the terminal. The session is written to
 
 The one command for everything. The kind of URL is auto-detected:
 
-- **Single** answer or article → archived directly.
+- **Single** answer, article, or pin (想法) → archived directly.
 - **Batch** — a collection (收藏夹), column (专栏), or question → every item is
   archived, each placed in a subdirectory named after the batch (see below).
 
@@ -67,6 +67,7 @@ The one command for everything. The kind of URL is auto-detected:
 # Single
 uv run zarchiver archive https://zhuanlan.zhihu.com/p/35562420
 uv run zarchiver archive https://www.zhihu.com/question/19550225/answer/123456
+uv run zarchiver archive https://www.zhihu.com/pin/2000653466067043281
 
 # Batch (same command)
 uv run zarchiver archive https://www.zhihu.com/collection/<id>
