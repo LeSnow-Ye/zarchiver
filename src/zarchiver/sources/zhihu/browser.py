@@ -156,8 +156,10 @@ class ZhihuBrowser:
         """Navigate to ``url`` and wait for content.
 
         The HTTP status is intentionally ignored (Zhihu serves 403 + hydrates).
-        If ``wait_selector`` is given we wait for it; otherwise we wait for the
-        embedded data script or fall back to a short settle delay.
+        If ``wait_selector`` is given we wait for it to be visible; otherwise we
+        wait for the embedded ``#js-initialData`` script to be *attached* (a
+        ``<script>`` never becomes "visible", so it must not be waited on with
+        the default visible state) or fall back to a short settle delay.
         """
         log.debug("navigating to %s", url)
         start = time.monotonic()
@@ -165,9 +167,12 @@ class ZhihuBrowser:
             url, wait_until="domcontentloaded", timeout=self.config.nav_timeout_ms
         )
         status = resp.status if resp else None
-        selector = wait_selector or "#js-initialData"
+        if wait_selector:
+            selector, state = wait_selector, "visible"
+        else:
+            selector, state = "#js-initialData", "attached"
         try:
-            page.wait_for_selector(selector, timeout=8000)
+            page.wait_for_selector(selector, state=state, timeout=8000)
             log.debug(
                 "loaded %s (http %s, %.1fs, %r present)",
                 url, status, time.monotonic() - start, selector,
