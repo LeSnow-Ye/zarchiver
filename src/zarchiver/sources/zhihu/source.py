@@ -115,25 +115,43 @@ class ZhihuSource(Source):
     def _scroll_collect_links(self, url: str, link_pattern: str) -> list[str]:
         """Open a batch page, scroll to load entries, return matching links.
 
-        ``link_pattern`` is a regex matched against each anchor href.
+        Candidate URLs are harvested from several signals, because Zhihu's
+        lazy-loaded answer/article cards don't always expose a clean ``<a>``
+        href: plain anchors, ``meta[itemprop="url"]`` tags, and answer ids on
+        ``.AnswerItem[data-zop]`` (reconstructed into answer URLs). All
+        candidates are then filtered by ``link_pattern``.
         """
         page = self.browser.new_page()
         found: list[str] = []
         seen: set[str] = set()
         pat = re.compile(link_pattern)
         cap = self._max_items()
+        # JS that returns every candidate item URL currently in the DOM.
+        harvest_js = """() => {
+            const urls = new Set();
+            document.querySelectorAll('a[href]').forEach(a => urls.add(a.href));
+            document.querySelectorAll('meta[itemprop="url"]').forEach(
+                m => { if (m.content) urls.add(m.content); });
+            document.querySelectorAll('.AnswerItem[data-zop]').forEach(el => {
+                try {
+                    const z = JSON.parse(el.getAttribute('data-zop'));
+                    const q = window.location.pathname.match(/question\\/(\\d+)/);
+                    if (z.itemId && q) {
+                        urls.add('https://www.zhihu.com/question/' + q[1] +
+                                 '/answer/' + z.itemId);
+                    }
+                } catch (e) {}
+            });
+            return [...urls];
+        }"""
         try:
             self.browser.goto(page, url)
             stagnant = 0
             last_count = 0
-            # Scroll until no new links appear (or cap reached).
-            for _ in range(60):  # hard ceiling on scroll iterations
-                hrefs = page.eval_on_selector_all(
-                    "a",
-                    "els => els.map(e => e.href).filter(Boolean)",
-                )
-                for h in hrefs:
-                    if pat.search(h) and h not in seen:
+            for _ in range(80):  # hard ceiling on scroll iterations
+                candidates = page.evaluate(harvest_js)
+                for h in candidates:
+                    if h and pat.search(h) and h not in seen:
                         seen.add(h)
                         found.append(h)
                 if cap and len(found) >= cap:
@@ -141,13 +159,13 @@ class ZhihuSource(Source):
                     break
                 if len(found) == last_count:
                     stagnant += 1
-                    if stagnant >= 3:
+                    if stagnant >= 4:
                         break
                 else:
                     stagnant = 0
                     last_count = len(found)
-                page.mouse.wheel(0, 3000)
-                page.wait_for_timeout(900)
+                page.mouse.wheel(0, 4000)
+                page.wait_for_timeout(1100)
             return found
         finally:
             page.close()
