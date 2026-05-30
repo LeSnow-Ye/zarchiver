@@ -1,0 +1,37 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# zarchiver: secrets & local state (never commit)
+config.toml
+secrets.toml
+.env
+*.secret
+storage_state.json
+.zhihu_profile/
+browser_profile/
+
+# zarchiver: runtime output & databases
+vault/
+archive/
+output/
+*.sqlite
+*.sqlite3
+*.db
+zarchiver.db
+
+# Playwright / MCP scratch
+.playwright-mcp/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

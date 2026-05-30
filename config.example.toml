@@ -1,0 +1,68 @@
+# zarchiver configuration example.
+#
+# Copy this file to `config.toml` and edit. `config.toml` is gitignored so your
+# secrets and local paths stay out of version control.
+#
+# Secrets can also be supplied via environment variables, which override values
+# here:
+#   DEEPSEEK_API_KEY   -> ai.api_key
+#   ZHIHU_COOKIE       -> browser.cookie_string
+#   ZARCHIVER_VAULT    -> obsidian.vault_path
+#   ZARCHIVER_DB       -> archive.db_path
+#   ZARCHIVER_HEADLESS -> browser.headless ("1"/"true" to force headless)
+
+[archive]
+db_path = "zarchiver.db"
+# What to do when an item was already archived: "skip", "update", or "ask".
+on_duplicate = "skip"
+
+[browser]
+# Zhihu blocks headless chrome-headless-shell. Keep this false (headful).
+# On a real headless server, run the CLI under `xvfb-run`.
+headless = false
+locale = "zh-CN"
+# Persistent login state saved by `zarchiver login`. Gitignored.
+storage_state = "storage_state.json"
+# Fallback for headless/server use: paste an exported cookie string here
+# (or set ZHIHU_COOKIE). Leave empty to use the login flow instead.
+cookie_string = ""
+nav_timeout_ms = 40000
+# Polite randomized delay between items in a batch (milliseconds).
+min_delay_ms = 1200
+max_delay_ms = 3500
+# Cap items pulled from a collection/column per run (0 = unlimited).
+max_items = 0
+
+[obsidian]
+enabled = true
+vault_path = "vault"
+folder = "Zhihu"
+assets_folder = "Zhihu/assets"
+download_images = true
+# Available fields: {title} {author} {source_id} {content_type} {date}
+filename_template = "{title} - {author}"
+# Optional: drive the Obsidian desktop app via its CLI. Requires the app to be
+# running, so it does not work headless. Off by default.
+use_cli = false
+cli_vault_name = ""
+
+[html]
+enabled = true
+output_path = "archive/html"
+# Inline images as base64 for fully self-contained HTML files.
+embed_images = false
+
+[ai]
+enabled = true
+provider = "deepseek"
+base_url = "https://api.deepseek.com"
+# Prefer the DEEPSEEK_API_KEY env var over putting the key here.
+api_key = ""
+model = "deepseek-v4-flash"
+# deepseek-v4-flash is a reasoning model; keep max_tokens generous.
+max_tokens = 1200
+temperature = 0.3
+max_input_chars = 12000
+timeout_s = 120
+# Language for summaries/tags: "zh" or "en".
+language = "zh"

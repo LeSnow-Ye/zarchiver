@@ -1,0 +1,36 @@
+[project]
+name = "zarchiver"
+version = "0.1.0"
+description = "Archive Zhihu content (answers/articles) locally as Obsidian markdown + HTML, with AI summarization and tagging."
+readme = "README.md"
+authors = [
+    { name = "LeSnow-Ye", email = "lesnow.ye@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "httpx>=0.28.1",
+    "markdownify>=1.2.2",
+    "platformdirs>=4.10.0",
+    "playwright>=1.60.0",
+    "pyyaml>=6.0.3",
+    "typer>=0.26.3",
+]
+
+[project.scripts]
+zarchiver = "zarchiver.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.10.6,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: tests that hit live external services (Zhihu/DeepSeek); deselect with -m 'not live'",
+]
