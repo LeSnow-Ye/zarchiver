@@ -6,8 +6,11 @@ Orchestrates the full flow for one or many items:
 
 It is deliberately small and platform-agnostic: it depends on the ``Source``,
 ``Exporter``, ``Summarizer`` and ``StateStore`` abstractions, never on Zhihu or
-markdown specifics. Duplicate handling, AI gating, and which exporters run are
-all driven by config.
+markdown specifics. AI gating and which exporters run are driven by config.
+
+Duplicate detection is based on **whether the output already exists on disk**:
+an item is a duplicate when every enabled exporter's target file is already
+present. The ``on_duplicate`` policy (skip/update/ask) then decides what to do.
 """
 
 from __future__ import annotations
@@ -88,11 +91,17 @@ class Pipeline:
 
     # ------------------------------------------------------------------ #
     def _process(self, item: ArchiveItem) -> ItemOutcome:
-        status = self.store.status_for(item)  # new | unchanged | changed
-        action = self._decide(item, status)
+        # Duplicate detection is based purely on whether the output already
+        # exists on disk: an item counts as a duplicate when every enabled
+        # exporter's target file is already present.
+        targeted = [e for e in self.exporters if e.target_path(item) is not None]
+        exists = bool(targeted) and all(e.already_exists(item) for e in targeted)
+        action = self._decide(item, exists)
         if action is None:
             self._progress(f"skip   {item.title}")
-            return ItemOutcome(item, Action.SKIPPED, url=item.url, detail=status)
+            return ItemOutcome(
+                item, Action.SKIPPED, url=item.url, detail="exists"
+            )
 
         # AI enrichment (cached by content hash inside the summarizer).
         if self.summarizer is not None:
@@ -114,18 +123,20 @@ class Pipeline:
         self._progress(f"{action.value:8} {item.title}")
         return ItemOutcome(item, action, url=item.url, exports=exports)
 
-    def _decide(self, item: ArchiveItem, status: str) -> Optional[Action]:
-        """Return the action to take, or None to skip, per duplicate policy."""
-        if status == "new":
+    def _decide(self, item: ArchiveItem, exists: bool) -> Optional[Action]:
+        """Return the action to take, or None to skip, per duplicate policy.
+
+        ``exists`` is True when the output is already present on disk.
+        """
+        if not exists:
             return Action.ARCHIVED
-        # status is "unchanged" or "changed" → it's a known duplicate.
+        # Output already exists → it's a duplicate.
         policy = self.config.archive.on_duplicate
         if policy == "update":
             return Action.UPDATED
         if policy == "ask" and self.duplicate_prompt is not None:
             return Action.UPDATED if self.duplicate_prompt(item) else None
-        # Default "skip": still re-export if content actually changed? No —
-        # skip means skip. Users who want edits picked up use "update".
+        # Default "skip".
         return None
 
 

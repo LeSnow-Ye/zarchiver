@@ -30,8 +30,8 @@ for the design, [docs/usage.md](docs/usage.md) for commands,
   references are captured too.
 - **AI assist.** Summaries, tags, and a category are generated per item via an
   LLM (DeepSeek by default) and cached so re-runs never re-pay.
-- **Dedup.** A SQLite index tracks what's been archived; re-runs skip unchanged
-  content or detect edits.
+- **Dedup.** Re-runs skip items whose output already exists on disk; choose
+  skip / update / ask per duplicate.
 - **Batch or single.** Archive one URL, or a whole favorites collection or
   column.
 

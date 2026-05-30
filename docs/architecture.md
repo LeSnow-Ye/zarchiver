@@ -14,7 +14,7 @@ about markdown specifically.
                                   ▼
                   ┌──────────────────────────────────────────┐
                   │  Pipeline                                  │
-                  │   1. dedup check (StateStore)              │
+                  │   1. dedup check (output file exists?)     │
                   │   2. AI summarize/tag (cached)             │
                   │   3. fan out to exporters                  │
                   └───────────────┬──────────────────────────┘
@@ -31,8 +31,10 @@ about markdown specifically.
 Everything flows through `zarchiver.models.ArchiveItem` — a dataclass holding
 normalized content (title, HTML body, author, timestamps, metrics, topics) plus
 an `AIResult` slot. Sources produce it; the pipeline, store, AI module, and
-exporters all consume it. Its `key` (`platform:type:source_id`) is the dedup
-identity and its `content_hash()` drives change detection and AI caching.
+exporters all consume it. Its `key` (`platform:type:source_id`) is the archive
+identity and its `content_hash()` keys the AI cache. Duplicate detection,
+however, is based on whether an exporter's **output file already exists** (see
+the pipeline), not on the store.
 
 ## Modules
 
@@ -40,7 +42,7 @@ identity and its `content_hash()` drives change detection and AI caching.
 | --- | --- |
 | `models` | `ArchiveItem`, `Author`, `AIResult`, `ContentType`. |
 | `config` | Layered config: defaults → `config.toml` → env vars. |
-| `store` | `StateStore`: SQLite dedup index + AI result cache. |
+| `store` | `StateStore`: SQLite AI-result cache + archived-history log. |
 | `sources/base` | `Source` ABC: `supports(url)`, `fetch(url)`, `fetch_batch(url)`. |
 | `sources/zhihu` | Playwright browser, URL classification, `js-initialData` parser. |
 | `exporters/base` | `Exporter` ABC: `export(item)`. |

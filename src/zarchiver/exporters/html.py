@@ -117,6 +117,11 @@ class HtmlExporter(Exporter):
         out_dir = self.base_out_dir / subdir if subdir else self.base_out_dir
         return out_dir, out_dir / "assets"
 
+    def target_path(self, item: ArchiveItem) -> Path:
+        """Where the HTML page for ``item`` will be written."""
+        out_dir, _ = self._dirs_for(item)
+        return out_dir / f"{sanitize_filename(self._basename(item))}.html"
+
     def export(self, item: ArchiveItem) -> ExportResult:
         out_dir, assets_dir = self._dirs_for(item)
         out_dir.mkdir(parents=True, exist_ok=True)

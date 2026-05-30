@@ -306,3 +306,29 @@ def test_html_batch_subdir_placement(tmp_path):
     assert result.path.parent.parent == tmp_path / "h"
 
 
+# ---------------------------------------------------------------------- #
+# target_path / already_exists (file-based dedup support)
+# ---------------------------------------------------------------------- #
+def test_obsidian_target_path_matches_export(tmp_path):
+    cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=False)
+    exp = ObsidianExporter(cfg)
+    item = _sample_item()
+    target = exp.target_path(item)
+    assert not exp.already_exists(item)
+    result = exp.export(item)
+    assert result.path == target  # predicted path equals written path
+    assert exp.already_exists(item)  # now present on disk
+
+
+def test_html_target_path_matches_export(tmp_path):
+    cfg = HtmlConfig(output_path=str(tmp_path / "h"))
+    exp = HtmlExporter(cfg)
+    item = _sample_item()
+    target = exp.target_path(item)
+    assert not exp.already_exists(item)
+    result = exp.export(item)
+    assert result.path == target
+    assert exp.already_exists(item)
+
+
+

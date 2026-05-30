@@ -104,12 +104,18 @@ notes appear with working images and tags.
 
 ## Duplicate handling
 
-A SQLite index (`archive.db_path`) tracks every archived item by a stable key.
-On re-runs:
+An item is considered a duplicate when its output **already exists on disk** —
+that is, when every enabled exporter's target file is already present. (If only
+some outputs exist — say you enabled HTML after a markdown-only run — the missing
+ones are still written.) On a duplicate, the `on_duplicate` policy decides:
 
-- `skip` (default) — already-archived items are skipped, even if edited.
+- `skip` (default) — leave the existing files untouched.
 - `update` — re-fetch and re-export, overwriting the previous output.
 - `ask` — prompt per item.
 
-AI summaries are cached by content hash, so even when you re-archive, unchanged
-content is never re-sent to the LLM.
+Because detection is path-based, deleting an archived file makes that item
+archive again on the next run, and pointing a run at a fresh output directory
+re-archives everything regardless of past runs.
+
+AI summaries are still cached by content hash (in `archive.db_path`), so even
+when you re-archive, unchanged content is never re-sent to the LLM.

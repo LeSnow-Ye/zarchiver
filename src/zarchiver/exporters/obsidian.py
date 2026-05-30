@@ -88,6 +88,11 @@ class ObsidianExporter(Exporter):
         return notes_dir, assets_dir
 
     # ------------------------------------------------------------------ #
+    def target_path(self, item: ArchiveItem) -> Path:
+        """Where the note for ``item`` will be written."""
+        notes_dir, _ = self._dirs_for(item)
+        return notes_dir / f"{self._filename_for(item)}.md"
+
     def export(self, item: ArchiveItem) -> ExportResult:
         notes_dir, assets_dir = self._dirs_for(item)
         notes_dir.mkdir(parents=True, exist_ok=True)

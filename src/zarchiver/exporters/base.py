@@ -32,3 +32,18 @@ class Exporter(ABC):
     @abstractmethod
     def export(self, item: ArchiveItem) -> ExportResult:
         """Write ``item`` and return where it went."""
+
+    def target_path(self, item: ArchiveItem) -> Optional[Path]:
+        """Where :meth:`export` would write ``item``, without writing it.
+
+        Used for duplicate detection (does the output already exist?). Returns
+        None if this exporter can't predict a path; such exporters never count
+        as already-archived.
+        """
+        return None
+
+    def already_exists(self, item: ArchiveItem) -> bool:
+        """True if this exporter's output for ``item`` is already on disk."""
+        path = self.target_path(item)
+        return path is not None and path.exists()
+
