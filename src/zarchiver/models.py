@@ -80,6 +80,7 @@ class ArchiveItem:
     updated: Optional[datetime] = None
     question_title: Optional[str] = None
     question_url: Optional[str] = None
+    title_image: Optional[str] = None
     voteup_count: Optional[int] = None
     comment_count: Optional[int] = None
     topics: list[str] = field(default_factory=list)

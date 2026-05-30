@@ -12,6 +12,7 @@ unit-testable against saved fixtures with no browser involved.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -30,8 +31,13 @@ PLATFORM = "zhihu"
 def clean_content_html(html: str) -> str:
     """Normalize Zhihu's content HTML before it reaches generic exporters.
 
+    * Convert equation images (``equation?tex=...``) into ``<span class="ztex"
+      data-tex="..." data-block="...">`` so exporters can render real LaTeX
+      (markdown ``$...$`` / MathJax) instead of downloading them as images.
     * Unwrap ``link.zhihu.com/?target=<encoded>`` redirects to the real URL.
     * Turn ``<a class="video-box">`` embeds into a readable poster + label.
+    * Rebuild the reference list from inline ``<sup data-draft-type="reference">``
+      markers (Zhihu renders that list client-side, so it's absent here).
     * Drop ``<noscript>`` duplicates.
     """
     if not html:
@@ -40,6 +46,8 @@ def clean_content_html(html: str) -> str:
 
     for ns in soup.find_all("noscript"):
         ns.decompose()
+
+    _normalize_formulas(soup)
 
     # Video boxes: replace with poster image + a labelled link.
     for box in soup.select("a.video-box"):
@@ -65,7 +73,109 @@ def clean_content_html(html: str) -> str:
         if real:
             a["href"] = real
 
+    _append_references(soup)
+
     return str(soup)
+
+
+_EQUATION_RE = re.compile(r"equation\?tex=(?P<tex>.*)$")
+
+
+def _decode_tex(src: str) -> Optional[str]:
+    """Extract and decode the TeX source from a Zhihu equation image URL."""
+    m = _EQUATION_RE.search(src or "")
+    if not m:
+        return None
+    # Zhihu encodes '+' as a literal space separator in the tex query.
+    raw = m.group("tex").replace("+", " ")
+    return unquote(raw).strip()
+
+
+def _normalize_formulas(soup: BeautifulSoup) -> None:
+    """Replace ``<img ...equation?tex=...>`` with ``<span class="ztex">`` nodes.
+
+    A formula that is the sole meaningful child of its ``<p>`` is treated as a
+    display (block) formula; otherwise it's inline.
+    """
+    for img in soup.find_all("img"):
+        src = img.get("src") or ""
+        if "equation?tex=" not in src and img.get("eeimg") != "1":
+            continue
+        tex = _decode_tex(src)
+        if not tex:
+            # eeimg without decodable tex: fall back to alt text if present.
+            tex = (img.get("alt") or "").strip()
+        if not tex:
+            continue
+        parent = img.parent
+        is_block = False
+        if parent is not None and parent.name == "p":
+            # Block if the paragraph has no real text and no other content.
+            text = parent.get_text(strip=True)
+            other_imgs = [i for i in parent.find_all("img") if i is not img]
+            is_block = not text and not other_imgs
+        span = soup.new_tag("span")
+        span["class"] = "ztex"
+        span["data-tex"] = tex
+        if is_block:
+            span["data-block"] = "true"
+        img.replace_with(span)
+
+
+def _append_references(soup: BeautifulSoup) -> None:
+    """Rebuild a references section from inline reference ``<sup>`` markers.
+
+    Zhihu stores references as ``<sup data-draft-type="reference"
+    data-numero="N" data-text="..." data-url="...">[N]</sup>`` and renders the
+    bibliography client-side, so it never reaches our HTML. We turn each marker
+    into an anchor link and append a numbered reference list.
+    """
+    sups = soup.find_all("sup", attrs={"data-draft-type": "reference"})
+    if not sups:
+        return
+    refs: list[tuple[str, str, str]] = []  # (numero, text, url)
+    seen: set[str] = set()
+    for sup in sups:
+        numero = sup.get("data-numero") or str(len(refs) + 1)
+        text = (sup.get("data-text") or "").strip()
+        url = (sup.get("data-url") or "").strip()
+        if numero not in seen:
+            seen.add(numero)
+            refs.append((numero, text, url))
+        # Turn the inline marker into an anchor link to the reference entry.
+        anchor = soup.new_tag("a", href=f"#ref-{numero}")
+        anchor.string = f"[{numero}]"
+        anchor["class"] = "ref-marker"
+        sup.replace_with(anchor)
+
+    if not refs:
+        return
+    hr = soup.new_tag("hr")
+    heading = soup.new_tag("h2")
+    heading.string = "参考"
+    ol = soup.new_tag("ol")
+    ol["class"] = "reference-list"
+    for numero, text, url in sorted(refs, key=lambda r: _as_int(r[0])):
+        li = soup.new_tag("li")
+        li["id"] = f"ref-{numero}"
+        if text:
+            li.append(text + (" " if url else ""))
+        if url:
+            a = soup.new_tag("a", href=url)
+            a.string = url
+            li.append(a)
+        if not text and not url:
+            li.append("(无内容)")
+        ol.append(li)
+    for node in (hr, heading, ol):
+        soup.append(node)
+
+
+def _as_int(value: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _unwrap_redirect(href: str) -> Optional[str]:
@@ -126,6 +236,14 @@ def _topics(raw: dict) -> list[str]:
     return topics
 
 
+def _clean_image_url(url: Optional[str]) -> Optional[str]:
+    """Return a usable title-image URL, or None if absent/blank."""
+    if not url or not isinstance(url, str):
+        return None
+    url = url.strip()
+    return url or None
+
+
 # ---------------------------------------------------------------------- #
 # Article
 # ---------------------------------------------------------------------- #
@@ -150,6 +268,7 @@ def parse_article(data: dict, article_id: str) -> ArchiveItem:
         author=_make_author(raw.get("author")),
         created=ArchiveItem.epoch_to_dt(raw.get("created")),
         updated=ArchiveItem.epoch_to_dt(raw.get("updated")),
+        title_image=_clean_image_url(raw.get("titleImage")),
         voteup_count=raw.get("voteupCount"),
         comment_count=raw.get("commentCount"),
         topics=_topics(raw),

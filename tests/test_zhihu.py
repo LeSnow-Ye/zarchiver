@@ -117,3 +117,86 @@ def test_clean_content_video_box():
     assert "🎬 视频" in out
     assert "pic.zhimg.com/p.jpg" in out
     assert "www.zhihu.com/video/1" in out
+
+
+# ---------------------------------------------------------------------- #
+# Formulas: equation images -> ztex spans (not downloaded as images)
+# ---------------------------------------------------------------------- #
+def test_clean_content_inline_formula():
+    html = (
+        '<p>速度 <img src="https://www.zhihu.com/equation?tex=v" alt="v" '
+        'eeimg="1"/> 运动</p>'
+    )
+    out = P.clean_content_html(html)
+    assert "equation?tex=" not in out  # no longer an image
+    assert 'class="ztex"' in out
+    assert 'data-tex="v"' in out
+    assert "data-block" not in out  # inline, not block
+
+
+def test_clean_content_block_formula():
+    # A formula that is the sole content of its <p> is a display/block formula.
+    html = (
+        '<p><img src="https://www.zhihu.com/equation?tex=%5CDelta+N" '
+        'alt="\\Delta N" eeimg="1"/></p>'
+    )
+    out = P.clean_content_html(html)
+    assert 'data-block="true"' in out
+    assert "data-tex=" in out
+    assert "Delta N" in out  # decoded (+ -> space)
+
+
+def test_clean_content_formula_url_decoded():
+    html = (
+        '<p><img src="https://www.zhihu.com/equation?tex=a%5E2%2Bb%5E2" '
+        'eeimg="1"/></p>'
+    )
+    out = P.clean_content_html(html)
+    assert "a^2 b^2" in out or "a^2+b^2" in out  # %5E -> ^, decoded
+
+
+def test_parse_article_title_image_fixture():
+    path = FIXTURES / "article_formula.html"
+    if not path.is_file():
+        pytest.skip("formula fixture not captured")
+    data = P.extract_initial_data(path.read_text(encoding="utf-8"))
+    item = P.parse_article(data, "88789807")
+    assert item.title_image
+    assert "zhimg.com" in item.title_image
+    # Formulas converted, none left as images.
+    assert "equation?tex=" not in item.content_html
+    assert item.content_html.count('class="ztex"') > 10
+
+
+# ---------------------------------------------------------------------- #
+# References: rebuild list from inline reference sups
+# ---------------------------------------------------------------------- #
+def test_clean_content_references():
+    html = (
+        "<p>foo<sup data-text=\"来源\" data-url=\"https://example.com/a\" "
+        'data-draft-type="reference" data-numero="1">[1]</sup> bar'
+        "<sup data-text=\"\" data-url=\"https://example.com/b\" "
+        'data-draft-type="reference" data-numero="2">[2]</sup></p>'
+    )
+    out = P.clean_content_html(html)
+    # Reference section appended.
+    assert "参考" in out
+    assert 'class="reference-list"' in out
+    assert 'id="ref-1"' in out and 'id="ref-2"' in out
+    assert "https://example.com/a" in out
+    # Inline markers became anchors to the entries.
+    assert 'href="#ref-1"' in out
+    assert 'class="ref-marker"' in out
+    assert "<sup" not in out
+
+
+def test_parse_article_references_fixture():
+    path = FIXTURES / "article_references.html"
+    if not path.is_file():
+        pytest.skip("references fixture not captured")
+    data = P.extract_initial_data(path.read_text(encoding="utf-8"))
+    item = P.parse_article(data, "2017975495849952400")
+    assert "参考" in item.content_html
+    assert 'class="reference-list"' in item.content_html
+    assert item.content_html.count('class="ref-marker"') >= 5
+

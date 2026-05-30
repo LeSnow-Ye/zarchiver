@@ -25,6 +25,9 @@ for the design, [docs/usage.md](docs/usage.md) for commands,
   embeds in each page — far more reliable than scraping the DOM.
 - **Dual archive.** Every item is written as Obsidian-flavored markdown (YAML
   frontmatter + downloaded images) *and* as a self-contained HTML file.
+- **Faithful content.** Math is preserved as real LaTeX (`$...$` in markdown,
+  MathJax in HTML) rather than images; article title images and footnote
+  references are captured too.
 - **AI assist.** Summaries, tags, and a category are generated per item via an
   LLM (DeepSeek by default) and cached so re-runs never re-pay.
 - **Dedup.** A SQLite index tracks what's been archived; re-runs skip unchanged

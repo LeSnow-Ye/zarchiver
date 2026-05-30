@@ -55,6 +55,29 @@ paragraphs, `pic*.zhimg.com` images (lazy-loaded via `data-original` /
 `data-actualsrc`), and `link.zhihu.com/?target=...` redirect links — all
 normalized in `parser.clean_content_html`.
 
+## Formulas, title images, and references
+
+Three Zhihu-specific structures need special handling, done in
+`parser.clean_content_html` / `parse_article`:
+
+- **Formulas.** Zhihu renders math as images
+  (`<img src="https://www.zhihu.com/equation?tex=<urlencoded>" eeimg="1">`).
+  Downloading these as pictures loses the math, so the parser decodes the TeX
+  and converts each into `<span class="ztex" data-tex="...">`, marking it block
+  if it's the sole content of its paragraph. Exporters then render real math:
+  the Obsidian exporter emits `$...$` / `$$...$$` (protecting the LaTeX from
+  markdownify's escaping via placeholder tokens), and the HTML exporter emits
+  `\(...\)` / `\[...\]` and injects MathJax (only when formulas are present).
+- **Title images.** An article's cover image lives in the `titleImage` entity
+  field, separate from the content body. The parser captures it into
+  `ArchiveItem.title_image`; exporters prepend it (Obsidian as the first image,
+  HTML as a banner), downloading it like any other asset.
+- **References.** Footnote references are inline
+  `<sup data-draft-type="reference" data-numero="N" data-text="..."
+  data-url="...">` markers, but Zhihu builds the bibliography client-side so it
+  never reaches the HTML. The parser rebuilds a `参考` section from those markers
+  and turns each inline marker into an anchor link to its entry.
+
 ## Batch pages lazy-load
 
 On question and collection pages, answer cards are lazy-loaded and don't always

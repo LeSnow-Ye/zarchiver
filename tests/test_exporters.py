@@ -122,3 +122,84 @@ def test_obsidian_export_with_image_download(tmp_path):
     # Note references the local asset via relative path.
     text = result.path.read_text(encoding="utf-8")
     assert "assets/" in text
+
+
+# ---------------------------------------------------------------------- #
+# Formulas
+# ---------------------------------------------------------------------- #
+def _formula_item() -> ArchiveItem:
+    return ArchiveItem(
+        platform="zhihu",
+        content_type=ContentType.ARTICLE,
+        source_id="f1",
+        url="u",
+        title="T",
+        content_html=(
+            '<p>inline <span class="ztex" data-tex="a_b^2">x</span> end</p>'
+            '<p><span class="ztex" data-tex="\\frac{1}{2}" data-block="true">'
+            "y</span></p>"
+        ),
+    )
+
+
+def test_obsidian_formula_to_latex(tmp_path):
+    cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=False)
+    result = ObsidianExporter(cfg).export(_formula_item())
+    body = result.path.read_text(encoding="utf-8").split("---\n", 2)[2]
+    # Inline becomes $...$; underscores/carets are NOT markdown-escaped.
+    assert "$a_b^2$" in body
+    assert "a\\_b" not in body
+    # Block becomes $$...$$.
+    assert "$$" in body
+    assert "\\frac{1}{2}" in body
+
+
+def test_html_formula_to_mathjax(tmp_path):
+    cfg = HtmlConfig(output_path=str(tmp_path / "h"))
+    result = HtmlExporter(cfg).export(_formula_item())
+    doc = result.path.read_text(encoding="utf-8")
+    # MathJax script injected because formulas exist.
+    assert "mathjax" in doc.lower()
+    assert "\\(a_b^2\\)" in doc  # inline delimiter
+    assert "\\[\\frac{1}{2}\\]" in doc  # block delimiter
+
+
+def test_html_no_mathjax_without_formulas(tmp_path):
+    cfg = HtmlConfig(output_path=str(tmp_path / "h"))
+    item = _sample_item()  # no formulas
+    doc = HtmlExporter(cfg).export(item).path.read_text(encoding="utf-8")
+    assert "mathjax" not in doc.lower()
+
+
+# ---------------------------------------------------------------------- #
+# Title image
+# ---------------------------------------------------------------------- #
+def test_obsidian_title_image_prepended(tmp_path):
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+        "890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+    )
+    cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=True)
+    item = _sample_item()
+    item.title_image = "https://pic1.zhimg.com/title.jpg"
+    body = (
+        ObsidianExporter(cfg, fetch=lambda u: png)
+        .export(item)
+        .path.read_text(encoding="utf-8")
+        .split("---\n", 2)[2]
+    )
+    # Title image appears as the first content image (downloaded, local path).
+    assert "![" in body
+    assert "assets/" in body
+    # It should come before the body text.
+    assert body.index("![") < body.index("第一段")
+
+
+def test_html_title_image_banner(tmp_path):
+    cfg = HtmlConfig(output_path=str(tmp_path / "h"))  # no fetch -> stays remote
+    item = _sample_item()
+    item.title_image = "https://pic1.zhimg.com/title.jpg"
+    doc = HtmlExporter(cfg).export(item).path.read_text(encoding="utf-8")
+    assert 'class="title-image"' in doc
+    assert "https://pic1.zhimg.com/title.jpg" in doc
+

@@ -24,6 +24,10 @@ from markdownify import markdownify as md_convert
 from zarchiver.config import ObsidianConfig
 from zarchiver.exporters.assets import Fetcher, download_images, localize_images
 from zarchiver.exporters.base import Exporter, ExportResult
+from zarchiver.exporters.formulas import (
+    extract_formulas_for_markdown,
+    restore_formulas_markdown,
+)
 from zarchiver.models import ArchiveItem
 
 # Characters not allowed in file names on common filesystems / Obsidian.
@@ -54,7 +58,18 @@ class ObsidianExporter(Exporter):
         filename = self._filename_for(item)
         note_path = self.notes_dir / f"{filename}.md"
 
+        # Prepend the article title image (if any) as the first content block.
         body_html = item.content_html
+        if item.title_image:
+            body_html = (
+                f'<img src="{item.title_image}" alt="{item.title}"/>' + body_html
+            )
+
+        # Pull formulas out before image localization + markdown conversion so
+        # they become real LaTeX ($...$) instead of downloaded images, and so
+        # markdownify can't escape LaTeX-significant characters.
+        body_html, formulas = extract_formulas_for_markdown(body_html)
+
         if self.config.download_images and self._fetch is not None:
             # Relative path from a note in notes_dir to the assets dir.
             rel_prefix = self._assets_rel_prefix()
@@ -63,6 +78,7 @@ class ObsidianExporter(Exporter):
                 download_images(pairs, self.assets_dir, self._fetch)
 
         body_md = md_convert(body_html, heading_style="ATX", bullets="-")
+        body_md = restore_formulas_markdown(body_md, formulas)
         body_md = _tidy_markdown(body_md)
         document = self._frontmatter(item) + "\n" + body_md + "\n"
 

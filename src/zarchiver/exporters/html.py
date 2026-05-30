@@ -13,9 +13,12 @@ import html as html_lib
 from pathlib import Path
 from typing import Optional
 
+from bs4 import BeautifulSoup
+
 from zarchiver.config import HtmlConfig
 from zarchiver.exporters.assets import Fetcher, download_images, localize_images
 from zarchiver.exporters.base import Exporter, ExportResult
+from zarchiver.exporters.formulas import render_formulas_html
 from zarchiver.exporters.obsidian import _dedupe_tags, sanitize_filename
 from zarchiver.models import ArchiveItem
 
@@ -41,12 +44,19 @@ _TEMPLATE = """<!DOCTYPE html>
     border-radius: 10px; padding: 1px 10px; margin: 2px; font-size: .8rem; }}
   article img {{ max-width: 100%; height: auto; }}
   article {{ font-size: 1.05rem; }}
+  .title-image {{ width: 100%; max-height: 420px; object-fit: cover;
+    border-radius: 6px; margin: 1rem 0; }}
   figure {{ margin: 1rem 0; }}
   blockquote {{ border-left: 3px solid #ddd; margin-left: 0; padding-left: 1rem;
     color: #555; }}
+  .reference-list {{ font-size: .9rem; color: #444; }}
+  .reference-list a {{ color: #0066cc; word-break: break-all; }}
+  .ref-marker {{ color: #0066cc; text-decoration: none; vertical-align: super;
+    font-size: .75em; }}
   footer {{ border-top: 1px solid #eee; margin-top: 2rem; padding-top: 1rem;
     color: #999; font-size: .8rem; }}
 </style>
+{mathjax}
 </head>
 <body>
 <header>
@@ -54,6 +64,7 @@ _TEMPLATE = """<!DOCTYPE html>
   <div class="meta">{meta}</div>
   {ai}
 </header>
+{title_image}
 <article>
 {content}
 </article>
@@ -61,6 +72,15 @@ _TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+# Loaded only when an item actually contains formulas.
+_MATHJAX = """<script>
+window.MathJax = {
+  tex: { inlineMath: [['\\\\(', '\\\\)']], displayMath: [['\\\\[', '\\\\]']] },
+  options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre'] }
+};
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>"""
 
 
 class HtmlExporter(Exporter):
@@ -77,7 +97,12 @@ class HtmlExporter(Exporter):
         filename = sanitize_filename(self._basename(item))
         path = self.out_dir / f"{filename}.html"
 
-        content_html = item.content_html
+        # Render formulas to MathJax delimiters before image handling (so the
+        # ztex spans aren't treated as images).
+        soup = BeautifulSoup(item.content_html, "html.parser")
+        has_formulas = render_formulas_html(soup)
+        content_html = str(soup)
+
         if self._fetch is not None:
             if self.config.embed_images:
                 content_html = self._inline_images(content_html)
@@ -90,11 +115,38 @@ class HtmlExporter(Exporter):
             title=html_lib.escape(item.title),
             meta=self._meta_html(item),
             ai=self._ai_html(item),
+            title_image=self._title_image_html(item),
             content=content_html,
             url=html_lib.escape(item.url),
+            mathjax=_MATHJAX if has_formulas else "",
         )
         path.write_text(document, encoding="utf-8")
         return ExportResult(exporter=self.name, path=path)
+
+    # ------------------------------------------------------------------ #
+    def _title_image_html(self, item: ArchiveItem) -> str:
+        """Render the article title image as a banner, localized if possible."""
+        if not item.title_image:
+            return ""
+        src = item.title_image
+        if self._fetch is not None:
+            if self.config.embed_images:
+                data = self._fetch(src)
+                if data:
+                    b64 = base64.b64encode(data).decode("ascii")
+                    src = f"data:{_guess_mime(item.title_image)};base64,{b64}"
+            else:
+                _, pairs = localize_images(
+                    f'<img src="{item.title_image}">', "assets"
+                )
+                if pairs:
+                    saved = download_images(pairs, self.assets_dir, self._fetch)
+                    fname = saved.get(pairs[0][0], pairs[0][1])
+                    src = f"assets/{fname}"
+        return (
+            f'<img class="title-image" src="{html_lib.escape(src)}" '
+            f'alt="{html_lib.escape(item.title)}">'
+        )
 
     # ------------------------------------------------------------------ #
     def _basename(self, item: ArchiveItem) -> str:
