@@ -11,6 +11,7 @@ writing files straight into the vault directory, which works headless.
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
@@ -29,6 +30,8 @@ from zarchiver.exporters.formulas import (
     restore_formulas_markdown,
 )
 from zarchiver.models import ArchiveItem
+
+log = logging.getLogger(__name__)
 
 # Characters not allowed in file names on common filesystems / Obsidian.
 _ILLEGAL = re.compile(r'[\\/:*?"<>|#^\[\]]')
@@ -127,6 +130,7 @@ class ObsidianExporter(Exporter):
             return self._export_via_cli(item, filename, document, notes_dir)
 
         note_path.write_text(document, encoding="utf-8")
+        log.debug("wrote markdown note: %s", note_path)
         return ExportResult(exporter=self.name, path=note_path)
 
     # ------------------------------------------------------------------ #

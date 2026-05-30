@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import html as html_lib
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +22,8 @@ from zarchiver.exporters.base import Exporter, ExportResult
 from zarchiver.exporters.formulas import render_formulas_html
 from zarchiver.exporters.obsidian import _dedupe_tags, sanitize_filename
 from zarchiver.models import ArchiveItem
+
+log = logging.getLogger(__name__)
 
 _TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -152,6 +155,7 @@ class HtmlExporter(Exporter):
             mathjax=_MATHJAX if has_formulas else "",
         )
         path.write_text(document, encoding="utf-8")
+        log.debug("wrote HTML page: %s (mathjax=%s)", path, has_formulas)
         return ExportResult(exporter=self.name, path=path)
 
     # ------------------------------------------------------------------ #

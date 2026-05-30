@@ -15,6 +15,7 @@ present. The ``on_duplicate`` policy (skip/update/ask) then decides what to do.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Iterable, Optional
@@ -27,6 +28,8 @@ from zarchiver.exporters.base import Exporter, ExportResult
 from zarchiver.models import ArchiveItem
 from zarchiver.sources.base import Source, SourceError
 from zarchiver.store import StateStore
+
+log = logging.getLogger(__name__)
 
 
 class Action(str, Enum):
@@ -72,21 +75,26 @@ class Pipeline:
     # ------------------------------------------------------------------ #
     def archive_url(self, url: str) -> ItemOutcome:
         """Archive a single-item URL."""
+        log.info("archiving %s", url)
         try:
             item = self.source.fetch(url)
         except SourceError as exc:
+            log.error("failed to fetch %s: %s", url, exc)
             return ItemOutcome(None, Action.FAILED, url=url, detail=str(exc))
         return self._process(item)
 
     def archive_batch(self, url: str) -> list[ItemOutcome]:
         """Archive every item produced by a batch URL."""
+        log.info("archiving batch %s", url)
         outcomes: list[ItemOutcome] = []
         try:
             items: Iterable[ArchiveItem] = self.source.fetch_batch(url)
         except SourceError as exc:
+            log.error("failed to fetch batch %s: %s", url, exc)
             return [ItemOutcome(None, Action.FAILED, url=url, detail=str(exc))]
         for item in items:
             outcomes.append(self._process(item))
+        log.info("batch complete: %d item(s) processed", len(outcomes))
         return outcomes
 
     # ------------------------------------------------------------------ #
@@ -98,28 +106,42 @@ class Pipeline:
         exists = bool(targeted) and all(e.already_exists(item) for e in targeted)
         action = self._decide(item, exists)
         if action is None:
+            log.info("skip (exists): %r", item.title)
             self._progress(f"skip   {item.title}")
             return ItemOutcome(
                 item, Action.SKIPPED, url=item.url, detail="exists"
             )
+        log.debug(
+            "processing %r [%s] (exists=%s -> %s)",
+            item.title, item.key, exists, action.value,
+        )
 
         # AI enrichment (cached by content hash inside the summarizer).
         if self.summarizer is not None:
             try:
                 item.ai = self.summarizer.summarize(item)
             except Exception as exc:  # AI must never block archiving
+                log.warning("AI summarization failed for %r: %s", item.title, exc)
                 self._progress(f"  ai failed: {exc}")
 
         exports: list[ExportResult] = []
         for exporter in self.exporters:
             try:
-                exports.append(exporter.export(item))
+                result = exporter.export(item)
+                exports.append(result)
+                if result.path:
+                    log.debug("  [%s] -> %s", exporter.name, result.path)
             except Exception as exc:
+                log.error(
+                    "exporter %s failed for %r: %s",
+                    exporter.name, item.title, exc,
+                )
                 exports.append(
                     ExportResult(exporter=exporter.name, detail=f"failed: {exc}")
                 )
 
         self.store.record_archived(item)
+        log.info("%s: %r", action.value, item.title)
         self._progress(f"{action.value:8} {item.title}")
         return ItemOutcome(item, action, url=item.url, exports=exports)
 

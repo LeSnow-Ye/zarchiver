@@ -13,6 +13,7 @@ the commands override the most common settings.
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import typer
@@ -23,6 +24,7 @@ from zarchiver.ai import Summarizer, build_provider
 from zarchiver.config import Config
 from zarchiver.exporters.html import HtmlExporter
 from zarchiver.exporters.obsidian import ObsidianExporter
+from zarchiver.logging_setup import setup_logging
 from zarchiver.pipeline import Action, ItemOutcome, Pipeline, make_image_fetcher
 from zarchiver.sources.zhihu import ZhihuSource
 from zarchiver.sources.zhihu.browser import ZhihuBrowser
@@ -32,7 +34,28 @@ app = typer.Typer(
     add_completion=False,
     help="Archive Zhihu content to Obsidian markdown + HTML with AI summaries.",
 )
-console = Console()
+# Logs/progress go to stderr; final results (summary, status table) to stdout.
+console = Console(stderr=True)
+out = Console()
+log = logging.getLogger("zarchiver.cli")
+
+
+@app.callback()
+def _main(
+    verbose: int = typer.Option(
+        0,
+        "--verbose",
+        "-v",
+        count=True,
+        help="Increase log detail: -v for debug, -vv to also include "
+        "third-party libraries.",
+    ),
+    quiet: bool = typer.Option(
+        False, "--quiet", "-q", help="Only show warnings and errors."
+    ),
+):
+    """Configure logging before any command runs."""
+    setup_logging(verbosity=verbose, quiet=quiet, console=console)
 
 
 # ---------------------------------------------------------------------- #
@@ -42,6 +65,13 @@ def _load_config(
     config_path: Optional[str], no_ai: bool, on_duplicate: Optional[str]
 ) -> Config:
     cfg = Config.load(config_path)
+    log.debug(
+        "config: db=%s, vault=%s, html=%s, ai=%s/%s, on_duplicate=%s, "
+        "headless=%s",
+        cfg.archive.db_path, cfg.obsidian.vault_path, cfg.html.output_path,
+        cfg.ai.enabled, cfg.ai.model, cfg.archive.on_duplicate,
+        cfg.browser.headless,
+    )
     if no_ai:
         cfg.ai.enabled = False
     if on_duplicate:
@@ -65,20 +95,23 @@ def _build_pipeline(cfg: Config, source: ZhihuSource, subdir: Optional[str] = No
             HtmlExporter(cfg.html, fetch=fetch, subdir_override=subdir)
         )
     if not exporters:
-        console.print("[yellow]Warning: no exporters enabled in config.[/yellow]")
+        log.warning("no exporters enabled in config; nothing will be written")
+    else:
+        log.debug("exporters enabled: %s", ", ".join(e.name for e in exporters))
 
     summarizer = None
     if cfg.ai.enabled:
         if not cfg.ai.api_key:
-            console.print(
-                "[yellow]AI enabled but no API key (set DEEPSEEK_API_KEY); "
-                "continuing without summaries.[/yellow]"
+            log.warning(
+                "AI enabled but no API key (set DEEPSEEK_API_KEY); "
+                "continuing without summaries"
             )
         else:
             try:
                 summarizer = Summarizer(cfg.ai, build_provider(cfg.ai), store)
+                log.debug("AI summarizer ready (%s)", cfg.ai.model)
             except Exception as exc:
-                console.print(f"[yellow]AI disabled: {exc}[/yellow]")
+                log.warning("AI disabled: %s", exc)
 
     def ask(item) -> bool:
         return typer.confirm(f"  '{item.title}' already archived. Re-archive?")
@@ -90,7 +123,8 @@ def _build_pipeline(cfg: Config, source: ZhihuSource, subdir: Optional[str] = No
         store,
         summarizer,
         duplicate_prompt=ask,
-        progress=lambda msg: console.print(f"  {msg}"),
+        # Per-item progress is emitted via logging (see Pipeline); no separate
+        # progress callback to avoid duplicate output.
     )
     return pipeline, store
 
@@ -101,7 +135,7 @@ def _report(outcomes: list[ItemOutcome]) -> None:
         counts[o.action] += 1
     for o in outcomes:
         if o.action == Action.FAILED:
-            console.print(f"[red]FAILED[/red] {o.url}: {o.detail}")
+            log.error("FAILED %s: %s", o.url, o.detail)
     parts = [
         f"[green]{counts[Action.ARCHIVED]} archived[/green]",
         f"[cyan]{counts[Action.UPDATED]} updated[/cyan]",
@@ -109,7 +143,7 @@ def _report(outcomes: list[ItemOutcome]) -> None:
     ]
     if counts[Action.FAILED]:
         parts.append(f"[red]{counts[Action.FAILED]} failed[/red]")
-    console.print("Done: " + ", ".join(parts))
+    out.print("Done: " + ", ".join(parts))
 
 
 # ---------------------------------------------------------------------- #
@@ -127,7 +161,7 @@ def login(
     try:
         page = browser.new_page()
         page.goto("https://www.zhihu.com/signin", wait_until="domcontentloaded")
-        console.print(
+        out.print(
             "[bold]A browser window has opened.[/bold] Log in to Zhihu "
             "(scan QR or enter credentials)."
         )
@@ -135,14 +169,14 @@ def login(
             "Press Enter here once you're logged in", default="", show_default=False
         )
         if browser.is_logged_in(page):
-            console.print("[green]Login detected.[/green]")
+            out.print("[green]Login detected.[/green]")
         else:
-            console.print(
+            out.print(
                 "[yellow]Could not confirm login from page state; saving "
                 "session anyway.[/yellow]"
             )
         path = browser.save_storage_state()
-        console.print(f"Session saved to [bold]{path}[/bold].")
+        out.print(f"Session saved to [bold]{path}[/bold].")
     finally:
         browser.close()
 
@@ -181,7 +215,6 @@ def archive(
     pipeline, store = _build_pipeline(cfg, source, subdir=subdir)
     try:
         if target.is_batch:
-            console.print(f"Batch ({target.kind.value}): {url}")
             outcomes = pipeline.archive_batch(url)
         else:
             outcomes = [pipeline.archive_url(url)]
@@ -203,7 +236,7 @@ def status(
     store = StateStore(cfg.archive.db_path)
     try:
         total = store.count()
-        console.print(f"Archived items: [bold]{total}[/bold] (db: {cfg.archive.db_path})")
+        out.print(f"Archived items: [bold]{total}[/bold] (db: {cfg.archive.db_path})")
         rows = store.recent(limit)
         if rows:
             table = Table(show_header=True, header_style="bold")
@@ -212,7 +245,7 @@ def status(
             table.add_column("Updated")
             for r in rows:
                 table.add_row(r["content_type"], r["title"] or "", r["updated_at"][:19])
-            console.print(table)
+            out.print(table)
     finally:
         store.close()
 

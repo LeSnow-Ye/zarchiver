@@ -9,6 +9,7 @@ each item's page.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Iterator, Optional
 
@@ -19,6 +20,8 @@ from zarchiver.sources.zhihu import parser as P
 from zarchiver.sources.zhihu import urls as zurls
 from zarchiver.sources.zhihu.browser import ZhihuBrowser
 from zarchiver.sources.zhihu.urls import ZhihuKind, ZhihuTarget
+
+log = logging.getLogger(__name__)
 
 
 class ZhihuSource(Source):
@@ -37,6 +40,7 @@ class ZhihuSource(Source):
 
     def fetch(self, url: str) -> ArchiveItem:
         target = zurls.classify(url)
+        log.debug("classified %s as %s", url, target.kind.value)
         if target.kind == ZhihuKind.ARTICLE:
             return self._fetch_article(target.article_id, url)
         if target.kind == ZhihuKind.ANSWER:
@@ -72,6 +76,7 @@ class ZhihuSource(Source):
     @property
     def browser(self) -> ZhihuBrowser:
         if self._browser is None:
+            log.debug("starting browser on first use")
             self._browser = ZhihuBrowser(self.config.browser)
             self._browser.start()
         return self._browser
@@ -80,7 +85,9 @@ class ZhihuSource(Source):
         page = self.browser.new_page()
         try:
             self.browser.goto(page, url)
-            return page.content()
+            html = page.content()
+            log.debug("fetched %d bytes of HTML from %s", len(html), url)
+            return html
         finally:
             page.close()
 
@@ -92,10 +99,21 @@ class ZhihuSource(Source):
         data = P.extract_initial_data(html)
         if data:
             try:
-                return P.parse_article(data, article_id or "")
-            except SourceError:
-                pass  # fall through to DOM
-        return P.parse_article_dom(html, article_id or "", url)
+                item = P.parse_article(data, article_id or "")
+                log.debug(
+                    "parsed article %s from js-initialData: %r (%d chars, "
+                    "%d images, title_image=%s)",
+                    item.source_id, item.title, len(item.content_html),
+                    item.content_html.count("<img"), bool(item.title_image),
+                )
+                return item
+            except SourceError as exc:
+                log.debug("js-initialData parse failed (%s); trying DOM", exc)
+        else:
+            log.debug("no js-initialData for %s; trying DOM", url)
+        item = P.parse_article_dom(html, article_id or "", url)
+        log.debug("parsed article %s from DOM fallback", item.source_id)
+        return item
 
     def _fetch_answer(
         self, answer_id: Optional[str], question_id: Optional[str], url: str
@@ -104,7 +122,14 @@ class ZhihuSource(Source):
         data = P.extract_initial_data(html)
         if not data:
             raise SourceError(f"no embedded data for answer at {url}")
-        return P.parse_answer(data, answer_id or "", question_id)
+        item = P.parse_answer(data, answer_id or "", question_id)
+        log.debug(
+            "parsed answer %s by %s (%d chars)",
+            item.source_id,
+            item.author.name if item.author else "?",
+            len(item.content_html),
+        )
+        return item
 
     # ------------------------------------------------------------------ #
     # Batches
@@ -154,9 +179,10 @@ class ZhihuSource(Source):
             self.browser.goto(page, url)
             # Capture the batch's own metadata before scrolling churns the DOM.
             initial_data = P.extract_initial_data(page.content())
+            log.debug("scrolling %s to collect item links (cap=%s)", url, cap or "∞")
             stagnant = 0
             last_count = 0
-            for _ in range(80):  # hard ceiling on scroll iterations
+            for i in range(80):  # hard ceiling on scroll iterations
                 candidates = page.evaluate(harvest_js)
                 for h in candidates:
                     if h and pat.search(h) and h not in seen:
@@ -164,16 +190,22 @@ class ZhihuSource(Source):
                         found.append(h)
                 if cap and len(found) >= cap:
                     found = found[:cap]
+                    log.debug("reached cap of %d links; stopping scroll", cap)
                     break
                 if len(found) == last_count:
                     stagnant += 1
                     if stagnant >= 4:
+                        log.debug(
+                            "no new links after %d scrolls; stopping", i + 1
+                        )
                         break
                 else:
+                    log.debug("scroll %d: %d links so far", i + 1, len(found))
                     stagnant = 0
                     last_count = len(found)
                 page.mouse.wheel(0, 4000)
                 page.wait_for_timeout(1100)
+            log.info("collected %d item links from %s", len(found), url)
             return found, initial_data
         finally:
             page.close()
@@ -219,19 +251,24 @@ class ZhihuSource(Source):
         if not title:
             # Fall back to the batch id so a subdir always has a stable name.
             title = f"{kind.value}-{batch_id}" if batch_id else kind.value
+            log.debug("no %s title found; using fallback %r", kind.value, title)
+        log.info("batch %s: %r", kind.value, title)
         return BatchInfo(kind=kind, title=title, url=url, id=batch_id)
 
     def _iter_item_links(
         self, links: list[str], batch: Optional[BatchInfo] = None
     ) -> Iterator[ArchiveItem]:
         cap = self._max_items()
+        total = min(len(links), cap) if cap else len(links)
         count = 0
         for link in links:
             if cap and count >= cap:
                 return
+            log.info("fetching item %d/%d: %s", count + 1, total, link)
             try:
                 item = self.fetch(link)
-            except SourceError:
+            except SourceError as exc:
+                log.warning("skipping %s: %s", link, exc)
                 continue
             item.batch = batch
             count += 1

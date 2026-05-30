@@ -13,11 +13,14 @@ real URL in ``data-original``/``data-actualsrc``; we prefer those.
 from __future__ import annotations
 
 import hashlib
+import logging
 import mimetypes
 from pathlib import Path
 from typing import Callable, Optional
 
 from bs4 import BeautifulSoup
+
+log = logging.getLogger(__name__)
 
 # A function that fetches bytes for a URL (e.g. wrapping httpx). Returns None on
 # failure so a single bad image never aborts an export.
@@ -92,13 +95,17 @@ def download_images(
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
     result: dict[str, str] = {}
+    cached = downloaded = failed = 0
     for url, fname in pairs:
         target = dest_dir / fname
         if target.exists() and target.stat().st_size > 0:
             result[url] = fname
+            cached += 1
             continue
         data = fetch(url)
         if not data:
+            failed += 1
+            log.debug("image download failed: %s", url)
             continue
         # Fix missing extension from content if needed.
         if not Path(fname).suffix:
@@ -107,6 +114,14 @@ def download_images(
             target = dest_dir / fname
         target.write_bytes(data)
         result[url] = fname
+        downloaded += 1
+    if pairs:
+        log.debug(
+            "images for %s: %d downloaded, %d cached, %d failed",
+            dest_dir, downloaded, cached, failed,
+        )
+        if failed:
+            log.warning("%d image(s) failed to download into %s", failed, dest_dir)
     return result
 
 

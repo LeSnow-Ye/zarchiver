@@ -5,6 +5,29 @@ you've activated the venv). Every command accepts `--config/-c PATH` to point at
 a specific config file; otherwise `config.toml` in the current directory is used
 if present.
 
+## Logging and verbosity
+
+Global flags (placed before the command) control how much zarchiver logs:
+
+```bash
+uv run zarchiver archive <url>        # default: INFO — one line per item + steps
+uv run zarchiver -v archive <url>     # DEBUG — per-page fetches, parses, writes
+uv run zarchiver -vv archive <url>    # DEBUG + noisy third-party libs (Playwright…)
+uv run zarchiver -q archive <url>     # quiet — only warnings and errors
+```
+
+Logs and progress go to **stderr**; the final summary and the `status` table go
+to **stdout**, so you can pipe results without the log noise:
+
+```bash
+uv run zarchiver -q archive <url> 2>/dev/null   # just the "Done: …" summary
+```
+
+At `-v` you'll see, per item: the URL classification, page fetch size, parse
+result (content length, image count, whether a title image was found), the
+duplicate decision, AI cache hits / model calls, image download counts, and the
+exact path each exporter wrote.
+
 ## First-time setup
 
 ```bash

@@ -15,6 +15,7 @@ Findings that shape this module (see docs/scraping.md):
 
 from __future__ import annotations
 
+import logging
 import random
 import time
 from pathlib import Path
@@ -29,6 +30,9 @@ from playwright.sync_api import (
 )
 
 from zarchiver.config import BrowserConfig
+
+log = logging.getLogger(__name__)
+
 
 # Injected before any page script runs, to mask automation fingerprints.
 _STEALTH_JS = """
@@ -92,6 +96,10 @@ class ZhihuBrowser:
         self.close()
 
     def start(self) -> None:
+        log.debug(
+            "launching Chromium (headless=%s, ua=%r, locale=%s)",
+            self.headless, self.config.user_agent, self.config.locale,
+        )
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(
             headless=self.headless, args=_LAUNCH_ARGS
@@ -104,18 +112,22 @@ class ZhihuBrowser:
         }
         if storage and storage.is_file():
             context_kwargs["storage_state"] = str(storage)
+            log.debug("loaded saved session from %s", storage)
+        else:
+            log.debug("no saved session at %s; starting logged out", storage)
         self._context = self._browser.new_context(**context_kwargs)
         self._context.add_init_script(_STEALTH_JS)
 
         # Cookie-string fallback (headless/server): inject if provided.
         if self.config.cookie_string:
             try:
-                self._context.add_cookies(
-                    _parse_cookie_string(self.config.cookie_string)
-                )
-            except Exception:
+                cookies = _parse_cookie_string(self.config.cookie_string)
+                self._context.add_cookies(cookies)
+                log.debug("injected %d cookies from cookie_string", len(cookies))
+            except Exception as exc:
                 # Bad cookie strings shouldn't crash startup; login flow remains.
-                pass
+                log.warning("could not apply cookie_string: %s", exc)
+        log.debug("browser context ready")
 
     def close(self) -> None:
         try:
@@ -147,23 +159,34 @@ class ZhihuBrowser:
         If ``wait_selector`` is given we wait for it; otherwise we wait for the
         embedded data script or fall back to a short settle delay.
         """
-        page.goto(
+        log.debug("navigating to %s", url)
+        start = time.monotonic()
+        resp = page.goto(
             url, wait_until="domcontentloaded", timeout=self.config.nav_timeout_ms
         )
+        status = resp.status if resp else None
+        selector = wait_selector or "#js-initialData"
         try:
-            if wait_selector:
-                page.wait_for_selector(wait_selector, timeout=8000)
-            else:
-                page.wait_for_selector("#js-initialData", timeout=8000)
+            page.wait_for_selector(selector, timeout=8000)
+            log.debug(
+                "loaded %s (http %s, %.1fs, %r present)",
+                url, status, time.monotonic() - start, selector,
+            )
         except Exception:
             # Not fatal: parser will fall back to DOM or report a clear error.
             page.wait_for_timeout(1500)
+            log.debug(
+                "loaded %s (http %s, %.1fs, %r NOT found — will fall back)",
+                url, status, time.monotonic() - start, selector,
+            )
 
     def polite_delay(self) -> None:
         """Sleep a randomized human-ish interval between batch requests."""
         lo = self.config.min_delay_ms
         hi = max(lo, self.config.max_delay_ms)
-        time.sleep(random.uniform(lo, hi) / 1000.0)
+        seconds = random.uniform(lo, hi) / 1000.0
+        log.debug("polite delay: sleeping %.1fs", seconds)
+        time.sleep(seconds)
 
     # ------------------------------------------------------------------ #
     # Auth helpers
@@ -176,6 +199,7 @@ class ZhihuBrowser:
         storage = self._storage_path()
         if storage:
             self.context.storage_state(path=str(storage))
+            log.info("saved session to %s", storage)
         return storage
 
     def is_logged_in(self, page: Optional[Page] = None) -> bool:
@@ -195,8 +219,10 @@ class ZhihuBrowser:
                     } catch (e) { return false; }
                 }"""
             )
+            log.debug("login check: %s", "logged in" if result else "logged out")
             return bool(result)
-        except Exception:
+        except Exception as exc:
+            log.debug("login check failed: %s", exc)
             return False
         finally:
             if own_page:
