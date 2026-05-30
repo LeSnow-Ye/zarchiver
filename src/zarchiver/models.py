@@ -48,6 +48,27 @@ class AIResult:
         return not (self.summary or self.tags or self.category)
 
 
+@dataclass(slots=True)
+class Comment:
+    """A single comment on a piece of content.
+
+    Comments are threaded one level deep on Zhihu: a root comment carries its
+    direct replies in ``children``. ``content_html`` is the raw comment body
+    (may contain Zhihu emoji like ``[赞]``, links, and inline images).
+    """
+
+    id: str
+    content_html: str
+    author: Optional[Author] = None
+    created: Optional[datetime] = None
+    like_count: Optional[int] = None
+    children: list["Comment"] = field(default_factory=list)
+
+    def total_count(self) -> int:
+        """This comment plus all of its (nested) children."""
+        return 1 + sum(c.total_count() for c in self.children)
+
+
 class BatchKind(str, Enum):
     """The kind of batch an item was archived as part of."""
 
@@ -93,6 +114,7 @@ class ArchiveItem:
             context (drives subdir placement and collection metadata).
         voteup_count/comment_count: Engagement metrics, if known.
         topics: Platform-native topic/tag strings.
+        comments: Recorded comments (threaded one level), capped by config.
         ai: Populated by the AI module after fetch.
         raw: Escape hatch holding the original parsed structure for debugging.
     """
@@ -116,6 +138,7 @@ class ArchiveItem:
     comment_count: Optional[int] = None
     topics: list[str] = field(default_factory=list)
     excerpt: str = ""
+    comments: list[Comment] = field(default_factory=list)
     ai: AIResult = field(default_factory=AIResult)
     raw: dict = field(default_factory=dict)
 

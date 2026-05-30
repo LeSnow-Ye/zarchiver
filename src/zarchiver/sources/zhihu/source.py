@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Iterator, Optional
 
 from zarchiver.config import Config
 from zarchiver.models import ArchiveItem, BatchInfo, BatchKind
 from zarchiver.sources.base import Source, SourceError
+from zarchiver.sources.zhihu import comments as C
 from zarchiver.sources.zhihu import parser as P
 from zarchiver.sources.zhihu import urls as zurls
 from zarchiver.sources.zhihu.browser import ZhihuBrowser
@@ -42,16 +44,19 @@ class ZhihuSource(Source):
         target = zurls.classify(url)
         log.debug("classified %s as %s", url, target.kind.value)
         if target.kind == ZhihuKind.ARTICLE:
-            return self._fetch_article(target.article_id, url)
-        if target.kind == ZhihuKind.ANSWER:
-            return self._fetch_answer(target.answer_id, target.question_id, url)
-        if target.kind == ZhihuKind.PIN:
-            return self._fetch_pin(target.pin_id, url)
-        if target.is_batch:
+            item = self._fetch_article(target.article_id, url)
+        elif target.kind == ZhihuKind.ANSWER:
+            item = self._fetch_answer(target.answer_id, target.question_id, url)
+        elif target.kind == ZhihuKind.PIN:
+            item = self._fetch_pin(target.pin_id, url)
+        elif target.is_batch:
             raise SourceError(
                 f"{url} is a batch ({target.kind.value}); use fetch_batch()"
             )
-        raise SourceError(f"unsupported or unrecognized Zhihu URL: {url}")
+        else:
+            raise SourceError(f"unsupported or unrecognized Zhihu URL: {url}")
+        self._attach_comments(item)
+        return item
 
     def fetch_batch(self, url: str) -> Iterator[ArchiveItem]:
         target = zurls.classify(url)
@@ -92,6 +97,55 @@ class ZhihuSource(Source):
             return html
         finally:
             page.close()
+
+    def _get_json(self, url: str) -> Optional[dict]:
+        """GET a Zhihu JSON API endpoint through the browser context.
+
+        Going through ``context.request`` reuses the session's cookies and
+        passes Zhihu's hotlink checks. Zhihu intermittently 403s API calls (the
+        same edge quirk as navigation), so a transient 403 is retried briefly.
+        Returns None on persistent failure so a failed comment fetch never
+        aborts archiving the item itself.
+        """
+        headers = {
+            "x-requested-with": "fetch",
+            "referer": "https://www.zhihu.com/",
+        }
+        for attempt in range(3):
+            try:
+                resp = self.browser.context.request.get(url, headers=headers)
+                if resp.status == 200:
+                    return resp.json()
+                if resp.status == 403 and attempt < 2:
+                    # Transient edge 403: back off briefly and retry.
+                    log.debug(
+                        "comment API %s -> http 403 (retry %d)", url, attempt + 1
+                    )
+                    time.sleep(0.6)
+                    continue
+                log.debug("comment API %s -> http %s", url, resp.status)
+                return None
+            except Exception as exc:
+                log.debug("comment API request failed (%s): %s", url, exc)
+                return None
+        return None
+
+    def _attach_comments(self, item: ArchiveItem) -> None:
+        """Fetch and attach comments for ``item`` per config (best-effort)."""
+        if not self.config.archive.comments:
+            return
+        resource_type = C.resource_type_for(item.content_type)
+        if not resource_type:
+            return
+        try:
+            item.comments = C.fetch_comments(
+                self._get_json,
+                resource_type,
+                item.source_id,
+                max_comments=self.config.archive.max_comments,
+            )
+        except Exception as exc:  # comments must never block archiving
+            log.warning("comment fetch failed for %r: %s", item.title, exc)
 
     # ------------------------------------------------------------------ #
     # Single items

@@ -67,10 +67,10 @@ def _load_config(
     cfg = Config.load(config_path)
     log.debug(
         "config: db=%s, vault=%s, html=%s, ai=%s/%s, on_duplicate=%s, "
-        "headless=%s",
+        "headless=%s, comments=%s/max=%s",
         cfg.archive.db_path, cfg.obsidian.vault_path, cfg.html.output_path,
         cfg.ai.enabled, cfg.ai.model, cfg.archive.on_duplicate,
-        cfg.browser.headless,
+        cfg.browser.headless, cfg.archive.comments, cfg.archive.max_comments,
     )
     if no_ai:
         cfg.ai.enabled = False
@@ -188,6 +188,14 @@ def archive(
     ),
     config: Optional[str] = typer.Option(None, "--config", "-c"),
     no_ai: bool = typer.Option(False, "--no-ai", help="Disable AI summarization"),
+    no_comments: bool = typer.Option(
+        False, "--no-comments", help="Do not record comments for this run"
+    ),
+    max_comments: Optional[int] = typer.Option(
+        None,
+        "--max-comments",
+        help="Max comments to record per item, incl. replies (0 = all)",
+    ),
     on_duplicate: Optional[str] = typer.Option(
         None, "--on-duplicate", help="skip | update | ask"
     ),
@@ -210,6 +218,10 @@ def archive(
     cfg = _load_config(config, no_ai, on_duplicate)
     if limit:
         cfg.browser.max_items = limit
+    if no_comments:
+        cfg.archive.comments = False
+    if max_comments is not None:
+        cfg.archive.max_comments = max_comments
     target = classify(url)
     source = ZhihuSource(cfg)
     pipeline, store = _build_pipeline(cfg, source, subdir=subdir)

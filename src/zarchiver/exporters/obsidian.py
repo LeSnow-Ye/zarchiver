@@ -25,6 +25,7 @@ from markdownify import markdownify as md_convert
 from zarchiver.config import ObsidianConfig
 from zarchiver.exporters.assets import Fetcher, download_images, localize_images
 from zarchiver.exporters.base import Exporter, ExportResult
+from zarchiver.exporters.comments import comments_markdown_fragment
 from zarchiver.exporters.formulas import (
     extract_formulas_for_markdown,
     restore_formulas_markdown,
@@ -108,6 +109,9 @@ class ObsidianExporter(Exporter):
             body_html = (
                 f'<img src="{item.title_image}" alt="{item.title}"/>' + body_html
             )
+
+        # Append recorded comments (becomes blockquote threads in markdown).
+        body_html += comments_markdown_fragment(item)
 
         # Pull formulas out before image localization + markdown conversion so
         # they become real LaTeX ($...$) instead of downloaded images, and so

@@ -19,6 +19,7 @@ from bs4 import BeautifulSoup
 from zarchiver.config import HtmlConfig
 from zarchiver.exporters.assets import Fetcher, download_images, localize_images
 from zarchiver.exporters.base import Exporter, ExportResult
+from zarchiver.exporters.comments import comments_html_fragment
 from zarchiver.exporters.formulas import render_formulas_html
 from zarchiver.exporters.obsidian import _dedupe_tags, sanitize_filename
 from zarchiver.models import ArchiveItem
@@ -56,6 +57,17 @@ _TEMPLATE = """<!DOCTYPE html>
   .reference-list a {{ color: #0066cc; word-break: break-all; }}
   .ref-marker {{ color: #0066cc; text-decoration: none; vertical-align: super;
     font-size: .75em; }}
+  .comments {{ border-top: 2px solid #eee; margin-top: 2.5rem;
+    padding-top: 1rem; }}
+  .comments h2 {{ font-size: 1.2rem; }}
+  .comment {{ margin: .9rem 0; padding: .6rem .9rem; background: #fafafa;
+    border-radius: 6px; font-size: .95rem; }}
+  .comment-meta {{ color: #888; font-size: .8rem; margin-bottom: .25rem; }}
+  .comment-body {{ color: #222; }}
+  .comment-body img {{ max-width: 100%; height: auto; }}
+  .comment-children {{ margin: .5rem 0 0 1rem; padding-left: .8rem;
+    border-left: 2px solid #e3e3e3; }}
+  .comment-children .comment {{ background: #f3f3f3; }}
   footer {{ border-top: 1px solid #eee; margin-top: 2rem; padding-top: 1rem;
     color: #999; font-size: .8rem; }}
 </style>
@@ -132,8 +144,10 @@ class HtmlExporter(Exporter):
         path = out_dir / f"{filename}.html"
 
         # Render formulas to MathJax delimiters before image handling (so the
-        # ztex spans aren't treated as images).
-        soup = BeautifulSoup(item.content_html, "html.parser")
+        # ztex spans aren't treated as images). Comments are appended as a
+        # styled section and localized along with the body.
+        full_html = item.content_html + comments_html_fragment(item)
+        soup = BeautifulSoup(full_html, "html.parser")
         has_formulas = render_formulas_html(soup)
         content_html = str(soup)
 

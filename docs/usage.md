@@ -77,6 +77,9 @@ uv run zarchiver archive https://www.zhihu.com/question/<id>
 
 Options:
 - `--no-ai` — skip AI summarization for this run.
+- `--no-comments` — don't record comments for this run.
+- `--max-comments N` — cap recorded comments per item, counting replies
+  (0 = all). Defaults to the config value (100).
 - `--on-duplicate skip|update|ask` — override the duplicate policy.
 - `--limit/-n N` — cap how many items a batch pulls (0 = all).
 - `--subdir NAME` — force output into this subdirectory instead of the
@@ -105,6 +108,20 @@ archive/html/次元壁/assets/<image>.jpg
 Disable this globally with `obsidian.batch_subdirs = false` /
 `html.batch_subdirs = false`, or override per run with `--subdir`.
 
+### Comments
+
+By default zarchiver records each item's comments — root comments and their
+replies (Zhihu threads one level deep). Because popular content can have
+thousands, the count is capped at **100 per item including replies**; the
+most-liked comments are kept when truncating. Adjust with `archive.max_comments`
+in config or `--max-comments N` per run (0 = all), or turn recording off with
+`archive.comments = false` / `--no-comments`.
+
+Comments render as a `## 评论 (N)` section at the end of each note: a threaded
+blockquote list in markdown, and styled, nested blocks in HTML. Each comment
+shows its author, date, and like count. Comments are not part of an item's
+content hash, so they don't affect duplicate detection.
+
 ## `status`
 
 Show how many items are archived and the most recent ones.
@@ -120,8 +137,10 @@ For each item zarchiver writes:
 
 - **Markdown** into `<vault_path>/<folder>/` (or a batch subdirectory) with YAML
   frontmatter (title, author, URL, dates, metrics, merged topic + AI tags, AI
-  category and summary, plus the column and/or collection it belongs to).
-- **HTML** into `<html.output_path>/` — a styled, self-contained page.
+  category and summary, plus the column and/or collection it belongs to), and a
+  threaded `## 评论` section when comments are recorded.
+- **HTML** into `<html.output_path>/` — a styled, self-contained page including a
+  comments section.
 - **Images** downloaded into the assets folders, with links rewritten to local
   relative paths.
 

@@ -111,6 +111,29 @@ collection, not just its first page.
 content-hash based and the extension is sniffed from magic bytes when the URL
 lacks one.
 
+## Comments
+
+Comments are **not** in `js-initialData`; Zhihu loads them lazily from a JSON
+API under `/api/v4/comment_v5`:
+
+- root comments — `/{resource_type}/{id}/root_comment?order_by=score&limit=N`
+- child replies — `/comment/{root_id}/child_comment?order_by=ts&limit=N`
+
+where `resource_type` is `articles` / `answers` / `pins`. zarchiver calls these
+through the browser context (`context.request`), so the session cookies and a
+Zhihu referer are applied automatically. Each root comment embeds its first few
+replies (`child_comments`) and reports the total (`child_comment_count`); the
+remainder are paged from the child endpoint only when the cap allows. Paging
+follows `paging.is_end` / `paging.next`.
+
+Comments are threaded one level deep (a root plus direct replies), matching
+Zhihu's model. The `archive.max_comments` cap counts **every** recorded comment
+— root and child — so one popular thread can't blow the budget; root comments
+are pulled most-liked-first (`order_by=score`) so truncation drops the long tail
+rather than the top discussion. See `sources/zhihu/comments.py`. A failed
+comment request is non-fatal: the item is still archived, just without (some)
+comments.
+
 ## Politeness
 
 Batch runs sleep a randomized `min_delay_ms`–`max_delay_ms` between items to

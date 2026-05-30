@@ -12,8 +12,8 @@ core.
 ## Status
 
 Working: single + batch archiving (answers, articles, pins, collections,
-columns, questions), Obsidian + HTML export with image download, AI
-summaries/tags via DeepSeek, and SQLite dedup. See [docs/architecture.md](docs/architecture.md)
+columns, questions), comment recording, Obsidian + HTML export with image
+download, AI summaries/tags via DeepSeek, and SQLite dedup. See [docs/architecture.md](docs/architecture.md)
 for the design, [docs/usage.md](docs/usage.md) for commands,
 [docs/configuration.md](docs/configuration.md) for config, and
 [docs/scraping.md](docs/scraping.md) for the scraping approach.
@@ -28,6 +28,8 @@ for the design, [docs/usage.md](docs/usage.md) for commands,
 - **Faithful content.** Math is preserved as real LaTeX (`$...$` in markdown,
   MathJax in HTML) rather than images; article title images and footnote
   references are captured too.
+- **Comments.** Each item's comments (root + replies, threaded) are recorded and
+  rendered as a `评论` section, capped at 100 per item by default.
 - **AI assist.** Summaries, tags, and a category are generated per item via an
   LLM (DeepSeek by default) and cached so re-runs never re-pay.
 - **Dedup.** Re-runs skip items whose output already exists on disk; choose

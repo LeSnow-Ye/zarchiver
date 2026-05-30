@@ -15,6 +15,11 @@
 db_path = "zarchiver.db"
 # What to do when an item was already archived: "skip", "update", or "ask".
 on_duplicate = "skip"
+# Record comments on archived content (root + child replies).
+comments = true
+# Max comments to record per item, counting child replies (0 = unlimited).
+# Popular content can have thousands, so the default is capped.
+max_comments = 100
 
 [browser]
 # Zhihu blocks headless chrome-headless-shell. Keep this false (headful).

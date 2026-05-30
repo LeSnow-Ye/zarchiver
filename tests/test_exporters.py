@@ -9,7 +9,15 @@ from zarchiver.config import HtmlConfig, ObsidianConfig
 from zarchiver.exporters.assets import localize_images
 from zarchiver.exporters.html import HtmlExporter
 from zarchiver.exporters.obsidian import ObsidianExporter, sanitize_filename
-from zarchiver.models import AIResult, ArchiveItem, Author, BatchInfo, BatchKind, ContentType
+from zarchiver.models import (
+    AIResult,
+    ArchiveItem,
+    Author,
+    BatchInfo,
+    BatchKind,
+    Comment,
+    ContentType,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -329,6 +337,66 @@ def test_html_target_path_matches_export(tmp_path):
     result = exp.export(item)
     assert result.path == target
     assert exp.already_exists(item)
+
+
+# ---------------------------------------------------------------------- #
+# Comments rendered into exported output
+# ---------------------------------------------------------------------- #
+def _commented_item() -> ArchiveItem:
+    item = _sample_item()
+    item.comments = [
+        Comment(
+            id="c1",
+            content_html="<p>很有启发</p>",
+            author=Author(name="读者甲"),
+            like_count=8,
+            children=[
+                Comment(
+                    id="c1r",
+                    content_html="<p>同意</p>",
+                    author=Author(name="读者乙"),
+                    like_count=1,
+                )
+            ],
+        )
+    ]
+    return item
+
+
+def test_obsidian_renders_comments(tmp_path):
+    cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=False)
+    body = (
+        ObsidianExporter(cfg)
+        .export(_commented_item())
+        .path.read_text(encoding="utf-8")
+        .split("---\n", 2)[2]
+    )
+    assert "## 评论 (2)" in body  # root + reply
+    assert "读者甲" in body and "读者乙" in body
+    # Threaded as blockquotes (reply nested deeper than root).
+    assert ">" in body
+    # Comment section comes after the article body.
+    assert body.index("第一段") < body.index("## 评论")
+
+
+def test_html_renders_comments(tmp_path):
+    cfg = HtmlConfig(output_path=str(tmp_path / "h"))
+    doc = HtmlExporter(cfg).export(_commented_item()).path.read_text(encoding="utf-8")
+    assert 'class="comments"' in doc
+    assert "评论 (2)" in doc
+    assert "读者甲" in doc and "很有启发" in doc
+    assert 'class="comment-children"' in doc  # reply threaded
+
+
+def test_no_comment_section_when_empty(tmp_path):
+    cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=False)
+    body = (
+        ObsidianExporter(cfg)
+        .export(_sample_item())  # no comments
+        .path.read_text(encoding="utf-8")
+    )
+    assert "## 评论" not in body
+
 
 
 

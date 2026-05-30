@@ -97,6 +97,11 @@ class ArchiveConfig:
     db_path: str = "zarchiver.db"
     # skip | update | ask
     on_duplicate: str = "skip"
+    # Record comments on archived content.
+    comments: bool = True
+    # Max comments to record per item, including child replies (0 = unlimited).
+    # Popular content can have thousands of comments, so this is capped.
+    max_comments: int = 100
 
 
 @dataclass

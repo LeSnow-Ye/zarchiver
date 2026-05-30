@@ -31,6 +31,8 @@ Values are resolved in this order, later winning:
 | --- | --- | --- |
 | `db_path` | `zarchiver.db` | SQLite file for dedup index + AI cache. |
 | `on_duplicate` | `skip` | `skip`, `update`, or `ask`. |
+| `comments` | `true` | Record comments (root + replies). Disable per run with `--no-comments`. |
+| `max_comments` | `100` | Max comments per item *including* child replies (0 = all). Override per run with `--max-comments`. |
 
 ### `[browser]`
 
