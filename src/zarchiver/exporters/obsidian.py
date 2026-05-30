@@ -71,12 +71,20 @@ class ObsidianExporter(Exporter):
         return ""
 
     def _dirs_for(self, item: ArchiveItem) -> tuple[Path, Path]:
-        """Resolve (notes_dir, assets_dir) for an item, applying any subdir."""
+        """Resolve (notes_dir, assets_dir) for an item, applying any subdir.
+
+        Without a batch subdir, assets go in the configured ``assets_folder``.
+        With a batch subdir, the note lives in ``<folder>/<batch>/`` and its
+        assets nest beside it in ``<folder>/<batch>/assets/`` — so each batch is
+        a self-contained directory (matching the HTML exporter's layout).
+        """
         subdir = self._subdir_for(item)
-        notes_dir = self.base_notes_dir / subdir if subdir else self.base_notes_dir
-        assets_dir = (
-            self.base_assets_dir / subdir if subdir else self.base_assets_dir
-        )
+        if subdir:
+            notes_dir = self.base_notes_dir / subdir
+            assets_dir = notes_dir / "assets"
+        else:
+            notes_dir = self.base_notes_dir
+            assets_dir = self.base_assets_dir
         return notes_dir, assets_dir
 
     # ------------------------------------------------------------------ #

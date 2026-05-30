@@ -52,7 +52,7 @@ Values are resolved in this order, later winning:
 | `enabled` | `true` | Write markdown notes. |
 | `vault_path` | `vault` | Vault root; open this in Obsidian. |
 | `folder` | `Zhihu` | Subfolder for notes. |
-| `assets_folder` | `Zhihu/assets` | Subfolder for images (relative to vault). |
+| `assets_folder` | `Zhihu/assets` | Subfolder for images (relative to vault). Used for non-batch archives; batch items keep assets in `<batch>/assets`. |
 | `download_images` | `true` | Download images and rewrite links. |
 | `filename_template` | `{title} - {author}` | Fields: `{title} {author} {source_id} {content_type} {date}`. |
 | `batch_subdirs` | `true` | Group batch items into a subdir named after the collection/column/question. Override per run with `--subdir`. |

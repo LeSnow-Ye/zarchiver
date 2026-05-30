@@ -64,14 +64,14 @@ one with a polite randomized delay between requests.
 
 ### Batch subdirectories
 
-By default, a batch archive groups its items into a subdirectory named after the
-collection / column / question, under both the vault folder and the HTML output
-(and a matching subfolder under assets). For example, archiving the column
-"次元壁" writes:
+By default, a batch archive groups its items into a self-contained subdirectory
+named after the collection / column / question, with the note (or HTML page) and
+its `assets/` folder side by side. For example, archiving the column "次元壁"
+writes:
 
 ```
 vault/Zhihu/次元壁/<note>.md
-vault/Zhihu/assets/次元壁/<image>.jpg
+vault/Zhihu/次元壁/assets/<image>.jpg
 archive/html/次元壁/<page>.html
 archive/html/次元壁/assets/<image>.jpg
 ```

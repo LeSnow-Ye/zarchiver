@@ -288,12 +288,15 @@ def test_obsidian_batch_assets_in_subdir(tmp_path):
         batch_subdirs=True,
     )
     result = ObsidianExporter(cfg, fetch=lambda u: png).export(_batch_item())
-    # Assets land under the batch subdir, and the note links to them relatively.
+    # Assets nest inside the batch subdir (<folder>/<batch>/assets), so each
+    # batch is self-contained and the note links to "assets/..." relatively.
     subdir = "收藏夹 好文精选"
-    assets = tmp_path / "v" / "Zhihu" / "assets" / subdir
-    assert list(assets.glob("*")), "expected image under batch assets subdir"
+    assets = tmp_path / "v" / "Zhihu" / subdir / "assets"
+    assert list(assets.glob("*")), "expected image under <batch>/assets"
     text = result.path.read_text(encoding="utf-8")
-    assert "assets/" in text and ".jpg" in text
+    assert "(assets/" in text and ".jpg" in text
+    # The old assets/<batch> layout must not be created.
+    assert not (tmp_path / "v" / "Zhihu" / "assets" / subdir).exists()
 
 
 def test_html_batch_subdir_placement(tmp_path):
