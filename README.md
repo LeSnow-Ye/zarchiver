@@ -11,8 +11,12 @@ core.
 
 ## Status
 
-Under active development. See [docs/architecture.md](docs/architecture.md) for
-the design and [docs/usage.md](docs/usage.md) for commands.
+Working: single + batch archiving (answers, articles, collections, columns,
+questions), Obsidian + HTML export with image download, AI summaries/tags via
+DeepSeek, and SQLite dedup. See [docs/architecture.md](docs/architecture.md)
+for the design, [docs/usage.md](docs/usage.md) for commands,
+[docs/configuration.md](docs/configuration.md) for config, and
+[docs/scraping.md](docs/scraping.md) for the scraping approach.
 
 ## Highlights
 
@@ -54,6 +58,17 @@ uv run zarchiver status
 - A graphical session for first-time login (Zhihu blocks headless browsers).
   On WSL2 this works out of the box via WSLg; on a true headless server, run
   under `xvfb-run` and supply cookies via `ZHIHU_COOKIE`.
+
+## Development
+
+```bash
+uv sync                       # install deps incl. dev (pytest)
+uv run pytest -m "not live"   # fast offline tests (no network/browser)
+uv run pytest -m live         # live tests (need DEEPSEEK_API_KEY, browser)
+```
+
+Tests run offline against trimmed HTML fixtures in `tests/fixtures/`; the
+`live`-marked tests hit real Zhihu/DeepSeek.
 
 ## License
 
