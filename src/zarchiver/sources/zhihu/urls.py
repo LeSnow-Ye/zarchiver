@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.parse import urlparse
 
 
@@ -119,3 +120,23 @@ def answer_url(question_id: str, answer_id: str) -> str:
 
 def question_url(question_id: str) -> str:
     return f"https://www.zhihu.com/question/{question_id}"
+
+
+def with_page(url: str, page: int) -> str:
+    """Return ``url`` with its ``page`` query parameter set to ``page``.
+
+    Used to walk paginated collections (``/collection/<id>?page=N``). Any
+    existing ``page`` param is replaced; other query params are preserved.
+    """
+    parts = urlparse(url)
+    query = parse_qs(parts.query)
+    query["page"] = [str(page)]
+    new_query = urlencode({k: v[-1] for k, v in query.items()})
+    return urlunparse(parts._replace(query=new_query))
+
+
+def strip_page(url: str) -> str:
+    """Return ``url`` with any ``page`` query parameter removed."""
+    parts = urlparse(url)
+    query = {k: v[-1] for k, v in parse_qs(parts.query).items() if k != "page"}
+    return urlunparse(parts._replace(query=urlencode(query)))

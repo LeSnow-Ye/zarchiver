@@ -78,11 +78,11 @@ Three Zhihu-specific structures need special handling, done in
   never reaches the HTML. The parser rebuilds a `参考` section from those markers
   and turns each inline marker into an anchor link to its entry.
 
-## Batch pages lazy-load
+## Batch pages: scroll vs. pagination
 
-On question and collection pages, answer cards are lazy-loaded and don't always
-expose a clean `<a href>` to each item. zarchiver harvests candidate item URLs
-from three signals while scrolling:
+Columns and questions **lazy-load on scroll**: their answer/article cards don't
+always expose a clean `<a href>`, so zarchiver harvests candidate item URLs from
+three signals while scrolling:
 
 1. plain `<a href>` anchors,
 2. `meta[itemprop="url"]` tags,
@@ -90,6 +90,14 @@ from three signals while scrolling:
 
 It scrolls until no new links appear (or the configured cap is reached), then
 visits each item.
+
+Collections (收藏夹) are different: they are **paginated** (~20 items per page)
+via a `?page=N` query parameter, with a numbered pager that reveals the last
+page. zarchiver reads that last-page number, then walks `page=1, 2, …`,
+harvesting links from each page with the same three signals, until it (a) passes
+the last page, (b) hits a page with no new links, or (c) reaches the cap. So
+`zarchiver archive https://www.zhihu.com/collection/<id>` captures the whole
+collection, not just its first page.
 
 ## Images and referer
 

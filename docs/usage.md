@@ -82,8 +82,10 @@ Options:
   batch-named default. Use `--subdir ''` to write directly into the base folder
   with no subdirectory.
 
-For batch URLs, zarchiver scrolls the page to load entries, then archives each
-one with a polite randomized delay between requests.
+For batch URLs, zarchiver loads all entries — scrolling for columns and
+questions, and walking every `?page=N` for collections (收藏夹), which are
+paginated — then archives each one with a polite randomized delay between
+requests. `--limit/-n` caps the total across pages.
 
 ### Batch subdirectories
 

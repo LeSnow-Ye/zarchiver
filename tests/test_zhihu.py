@@ -54,6 +54,36 @@ def test_batch_flag():
     assert not u.classify("https://zhuanlan.zhihu.com/p/1").is_batch
 
 
+def test_classify_collection_with_page_param():
+    # A paged collection URL still classifies as a collection.
+    t = u.classify("https://www.zhihu.com/collection/703771723?page=2")
+    assert t.kind == K.COLLECTION
+    assert t.collection_id == "703771723"
+    assert t.is_batch
+
+
+def test_with_page_adds_and_replaces():
+    base = "https://www.zhihu.com/collection/703771723"
+    assert u.with_page(base, 2) == base + "?page=2"
+    # Existing page param is replaced, not duplicated.
+    assert u.with_page(base + "?page=5", 3) == base + "?page=3"
+
+
+def test_with_page_preserves_other_params():
+    out = u.with_page("https://www.zhihu.com/collection/1?foo=bar", 4)
+    assert "foo=bar" in out and "page=4" in out
+
+
+def test_strip_page():
+    assert u.strip_page("https://www.zhihu.com/collection/1?page=5") == (
+        "https://www.zhihu.com/collection/1"
+    )
+    # No page param → unchanged path/query.
+    assert u.strip_page("https://www.zhihu.com/collection/1") == (
+        "https://www.zhihu.com/collection/1"
+    )
+
+
 # ---------------------------------------------------------------------- #
 # Parser (offline, against fixtures)
 # ---------------------------------------------------------------------- #
@@ -264,4 +294,82 @@ def test_batch_title_fallback_single_entity():
 def test_batch_title_missing():
     assert P.batch_title(None, "column", "x") is None
     assert P.batch_title({"initialState": {"entities": {}}}, "column", "x") is None
+
+
+# ---------------------------------------------------------------------- #
+# Collection pagination (offline, stubbing the browser-backed page fetch)
+# ---------------------------------------------------------------------- #
+def _source_with_pages(pages, max_items=0):
+    """Build a ZhihuSource whose _scroll_collect_links replays canned pages.
+
+    ``pages`` maps page number -> list of item links. The first page reports a
+    max_page equal to the highest page number provided.
+    """
+    from zarchiver.config import Config
+    from zarchiver.sources.zhihu import urls as zu
+    from zarchiver.sources.zhihu.source import ZhihuSource
+
+    cfg = Config()
+    cfg.browser.max_items = max_items
+    src = ZhihuSource(cfg)
+    max_page = max(pages) if pages else 1
+    calls = []
+
+    def fake_scroll(url, pattern, *, cap=None, detect_max_page=False):
+        # Determine which page is being requested from the ?page= param.
+        from urllib.parse import parse_qs, urlparse
+
+        q = parse_qs(urlparse(url).query)
+        page_num = int(q.get("page", ["1"])[0])
+        calls.append(page_num)
+        links = list(pages.get(page_num, []))
+        if cap is not None:
+            links = links[:cap]
+        detected = max_page if (detect_max_page and page_num == 1) else None
+        return links, {"page": page_num}, detected
+
+    src._scroll_collect_links = fake_scroll
+    return src, calls
+
+
+def test_collection_pagination_walks_all_pages():
+    pages = {1: ["a", "b"], 2: ["c", "d"], 3: ["e"]}
+    src, calls = _source_with_pages(pages)
+    links, data = src._collect_collection_links(
+        "https://www.zhihu.com/collection/1"
+    )
+    assert links == ["a", "b", "c", "d", "e"]
+    assert calls == [1, 2, 3]  # visited every page up to max
+    assert data == {"page": 1}  # page 1 data kept for the title
+
+
+def test_collection_pagination_respects_cap():
+    pages = {1: ["a", "b"], 2: ["c", "d"], 3: ["e", "f"]}
+    src, calls = _source_with_pages(pages, max_items=3)
+    links, _ = src._collect_collection_links(
+        "https://www.zhihu.com/collection/1"
+    )
+    assert links == ["a", "b", "c"]  # capped at 3, crossed into page 2
+    assert 3 not in calls  # stopped before fetching page 3
+
+
+def test_collection_pagination_stops_on_empty_page():
+    # max_page says 5, but page 3 is empty → stop early.
+    pages = {1: ["a"], 2: ["b"], 3: [], 4: ["d"], 5: ["e"]}
+    src, calls = _source_with_pages(pages)
+    links, _ = src._collect_collection_links(
+        "https://www.zhihu.com/collection/1"
+    )
+    assert links == ["a", "b"]
+    assert calls == [1, 2, 3]  # stopped at the empty page
+
+
+def test_collection_pagination_dedupes_across_pages():
+    # Overlapping links between pages are not double-counted.
+    pages = {1: ["a", "b"], 2: ["b", "c"]}
+    src, _ = _source_with_pages(pages)
+    links, _ = src._collect_collection_links(
+        "https://www.zhihu.com/collection/1"
+    )
+    assert links == ["a", "b", "c"]
 
