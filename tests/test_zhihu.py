@@ -412,79 +412,170 @@ def test_batch_title_missing():
 
 
 # ---------------------------------------------------------------------- #
-# Collection pagination (offline, stubbing the browser-backed page fetch)
+# Column / collection items API (offline parsing)
 # ---------------------------------------------------------------------- #
-def _source_with_pages(pages, max_items=0):
-    """Build a ZhihuSource whose _scroll_collect_links replays canned pages.
+def test_item_urls_from_column_api():
+    # Column items expose url/type at the top level.
+    payload = {
+        "data": [
+            {"type": "article", "id": "1", "url": "https://zhuanlan.zhihu.com/p/1"},
+            {"type": "article", "id": "2", "url": "https://zhuanlan.zhihu.com/p/2"},
+        ],
+        "paging": {"is_end": True},
+    }
+    assert P.item_urls_from_api(payload) == [
+        "https://zhuanlan.zhihu.com/p/1",
+        "https://zhuanlan.zhihu.com/p/2",
+    ]
 
-    ``pages`` maps page number -> list of item links. The first page reports a
-    max_page equal to the highest page number provided.
+
+def test_item_urls_from_collection_api():
+    # Collection items wrap the real object under "content".
+    payload = {
+        "data": [
+            {"content": {"type": "answer", "url": "https://www.zhihu.com/question/9/answer/1"}},
+            {"content": {"type": "article", "url": "https://zhuanlan.zhihu.com/p/3"}},
+        ]
+    }
+    assert P.item_urls_from_api(payload) == [
+        "https://www.zhihu.com/question/9/answer/1",
+        "https://zhuanlan.zhihu.com/p/3",
+    ]
+
+
+def test_item_urls_skips_non_items_and_deleted():
+    payload = {
+        "data": [
+            {"content": {"type": "zvideo", "url": "https://www.zhihu.com/zvideo/1"}},
+            {"content": {"type": "answer", "url": "https://www.zhihu.com/answer/2", "is_deleted": True}},
+            {"content": {"type": "pin", "url": "https://www.zhihu.com/pin/3"}},
+        ]
+    }
+    # Only the (non-deleted) pin survives; zvideo and deleted answer dropped.
+    assert P.item_urls_from_api(payload) == ["https://www.zhihu.com/pin/3"]
+
+
+def test_item_urls_canonicalizes_http():
+    payload = {"data": [{"type": "article", "url": "http://zhuanlan.zhihu.com/p/5"}]}
+    assert P.item_urls_from_api(payload) == ["https://zhuanlan.zhihu.com/p/5"]
+
+
+def test_item_urls_empty_payload():
+    assert P.item_urls_from_api(None) == []
+    assert P.item_urls_from_api({}) == []
+
+
+def test_api_paging_next():
+    assert P.api_paging_next({"paging": {"is_end": False, "next": "u2"}}) == "u2"
+    assert P.api_paging_next({"paging": {"is_end": True, "next": "u2"}}) is None
+    assert P.api_paging_next({"paging": {}}) is None  # missing is_end -> treat as end
+    assert P.api_paging_next({}) is None
+
+
+def test_collection_title_from_api():
+    assert P.collection_title_from_api(
+        {"collection": {"title": "我的收藏"}}
+    ) == "我的收藏"
+    assert P.collection_title_from_api({"collection": {"title": "  "}}) is None
+    assert P.collection_title_from_api(None) is None
+
+
+def test_column_title_from_api():
+    assert P.column_title_from_api({"title": "次元壁"}) == "次元壁"
+    assert P.column_title_from_api({}) is None
+
+
+# ---------------------------------------------------------------------- #
+# Column / collection fetching via the items API (offline, canned getter)
+# ---------------------------------------------------------------------- #
+def _source_with_api(pages, max_items=0):
+    """Build a ZhihuSource whose _get_json replays canned API pages by URL.
+
+    ``pages`` maps URL -> JSON payload. Records the URLs requested.
     """
     from zarchiver.config import Config
-    from zarchiver.sources.zhihu import urls as zu
     from zarchiver.sources.zhihu.source import ZhihuSource
 
     cfg = Config()
     cfg.browser.max_items = max_items
     src = ZhihuSource(cfg)
-    max_page = max(pages) if pages else 1
     calls = []
 
-    def fake_scroll(url, pattern, *, cap=None, detect_max_page=False):
-        # Determine which page is being requested from the ?page= param.
-        from urllib.parse import parse_qs, urlparse
+    def fake_get(url):
+        calls.append(url)
+        return pages.get(url)
 
-        q = parse_qs(urlparse(url).query)
-        page_num = int(q.get("page", ["1"])[0])
-        calls.append(page_num)
-        links = list(pages.get(page_num, []))
-        if cap is not None:
-            links = links[:cap]
-        detected = max_page if (detect_max_page and page_num == 1) else None
-        return links, {"page": page_num}, detected
-
-    src._scroll_collect_links = fake_scroll
+    src._get_json = fake_get
     return src, calls
 
 
-def test_collection_pagination_walks_all_pages():
-    pages = {1: ["a", "b"], 2: ["c", "d"], 3: ["e"]}
-    src, calls = _source_with_pages(pages)
-    links, data = src._collect_collection_links(
-        "https://www.zhihu.com/collection/1"
-    )
-    assert links == ["a", "b", "c", "d", "e"]
-    assert calls == [1, 2, 3]  # visited every page up to max
-    assert data == {"page": 1}  # page 1 data kept for the title
+def test_api_collection_walks_pages():
+    base = "https://www.zhihu.com/api/v4/collections/1/items?offset=0&limit=20"
+    p2 = "https://www.zhihu.com/api/v4/collections/1/items?offset=20&limit=20"
+    pages = {
+        base: {
+            "data": [{"content": {"type": "article", "url": f"https://zhuanlan.zhihu.com/p/{i}"}} for i in range(2)],
+            "paging": {"is_end": False, "next": p2},
+        },
+        p2: {
+            "data": [{"content": {"type": "article", "url": "https://zhuanlan.zhihu.com/p/9"}}],
+            "paging": {"is_end": True},
+        },
+    }
+    src, calls = _source_with_api(pages)
+    urls = src._collect_api_item_urls(base, label="collection")
+    assert urls == [
+        "https://zhuanlan.zhihu.com/p/0",
+        "https://zhuanlan.zhihu.com/p/1",
+        "https://zhuanlan.zhihu.com/p/9",
+    ]
+    assert calls == [base, p2]  # followed paging.next
 
 
-def test_collection_pagination_respects_cap():
-    pages = {1: ["a", "b"], 2: ["c", "d"], 3: ["e", "f"]}
-    src, calls = _source_with_pages(pages, max_items=3)
-    links, _ = src._collect_collection_links(
-        "https://www.zhihu.com/collection/1"
-    )
-    assert links == ["a", "b", "c"]  # capped at 3, crossed into page 2
-    assert 3 not in calls  # stopped before fetching page 3
+def test_api_respects_cap_and_stops_paging():
+    base = "https://www.zhihu.com/api/v4/columns/c/items?limit=20&ws_qiangzhisafe=0&offset=0"
+    p2 = "https://www.zhihu.com/api/v4/columns/c/items?offset=20"
+    pages = {
+        base: {
+            "data": [{"type": "article", "url": f"https://zhuanlan.zhihu.com/p/{i}"} for i in range(3)],
+            "paging": {"is_end": False, "next": p2},
+        },
+        p2: {"data": [{"type": "article", "url": "https://zhuanlan.zhihu.com/p/99"}], "paging": {"is_end": True}},
+    }
+    src, calls = _source_with_api(pages, max_items=2)
+    urls = src._collect_api_item_urls(base, label="column")
+    assert urls == ["https://zhuanlan.zhihu.com/p/0", "https://zhuanlan.zhihu.com/p/1"]
+    assert p2 not in calls  # cap met on page 1, no second request
 
 
-def test_collection_pagination_stops_on_empty_page():
-    # max_page says 5, but page 3 is empty → stop early.
-    pages = {1: ["a"], 2: ["b"], 3: [], 4: ["d"], 5: ["e"]}
-    src, calls = _source_with_pages(pages)
-    links, _ = src._collect_collection_links(
-        "https://www.zhihu.com/collection/1"
-    )
-    assert links == ["a", "b"]
-    assert calls == [1, 2, 3]  # stopped at the empty page
+def test_api_dedupes_across_pages():
+    base = "https://www.zhihu.com/api/v4/collections/1/items?offset=0&limit=20"
+    p2 = "https://www.zhihu.com/api/v4/collections/1/items?offset=20&limit=20"
+    pages = {
+        base: {
+            "data": [{"content": {"type": "article", "url": u}} for u in ("a", "b")],
+            "paging": {"is_end": False, "next": p2},
+        },
+        p2: {
+            "data": [{"content": {"type": "article", "url": u}} for u in ("b", "c")],
+            "paging": {"is_end": True},
+        },
+    }
+    src, _ = _source_with_api(pages)
+    assert src._collect_api_item_urls(base, label="collection") == ["a", "b", "c"]
 
 
-def test_collection_pagination_dedupes_across_pages():
-    # Overlapping links between pages are not double-counted.
-    pages = {1: ["a", "b"], 2: ["b", "c"]}
-    src, _ = _source_with_pages(pages)
-    links, _ = src._collect_collection_links(
-        "https://www.zhihu.com/collection/1"
-    )
-    assert links == ["a", "b", "c"]
+def test_api_stops_on_failed_request():
+    base = "https://www.zhihu.com/api/v4/collections/1/items?offset=0&limit=20"
+    p2 = "https://www.zhihu.com/api/v4/collections/1/items?offset=20&limit=20"
+    pages = {
+        base: {
+            "data": [{"content": {"type": "article", "url": "a"}}],
+            "paging": {"is_end": False, "next": p2},
+        }
+        # p2 missing -> getter returns None -> stop with partial results.
+    }
+    src, _ = _source_with_api(pages)
+    assert src._collect_api_item_urls(base, label="collection") == ["a"]
+
 

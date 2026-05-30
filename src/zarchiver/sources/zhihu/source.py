@@ -210,30 +210,26 @@ class ZhihuSource(Source):
 
     def _scroll_collect_links(
         self, url: str, link_pattern: str, *, cap: Optional[int] = None,
-        detect_max_page: bool = False,
-    ) -> tuple[list[str], Optional[dict], Optional[int]]:
+    ) -> tuple[list[str], Optional[dict]]:
         """Open a batch page, scroll to load entries, return links + page data.
 
-        Candidate URLs are harvested from several signals, because Zhihu's
-        lazy-loaded answer/article cards don't always expose a clean ``<a>``
-        href: plain anchors, ``meta[itemprop="url"]`` tags, and answer ids on
+        Used for question batches (answers lazy-load on scroll). Candidate URLs
+        are harvested from several signals, because Zhihu's lazy-loaded answer
+        cards don't always expose a clean ``<a>`` href: plain anchors,
+        ``meta[itemprop="url"]`` tags, and answer ids on
         ``.AnswerItem[data-zop]`` (reconstructed into answer URLs). All
         candidates are then filtered by ``link_pattern``.
 
         ``cap`` limits how many links to collect (defaults to the configured
-        ``max_items``; pass a per-page remaining budget when paginating).
-        ``detect_max_page`` reads the highest page number from the pagination
-        control (used for collections).
+        ``max_items``).
 
-        Returns ``(links, initial_data, max_page)`` where ``initial_data`` is
-        the page's parsed ``js-initialData`` and ``max_page`` is the pager's
-        last page number (or None).
+        Returns ``(links, initial_data)`` where ``initial_data`` is the page's
+        parsed ``js-initialData`` (used to resolve the batch title).
         """
         page = self.browser.new_page()
         found: list[str] = []
         seen: set[str] = set()
         pat = re.compile(link_pattern)
-        max_page: Optional[int] = None
         if cap is None:
             cap = self._max_items()
         initial_data: Optional[dict] = None
@@ -285,113 +281,85 @@ class ZhihuSource(Source):
                     last_count = len(found)
                 page.mouse.wheel(0, 4000)
                 page.wait_for_timeout(1100)
-            if detect_max_page:
-                max_page = self._read_max_page(page)
             log.info("collected %d item links from %s", len(found), url)
-            return found, initial_data, max_page
+            return found, initial_data
         finally:
             page.close()
 
-    @staticmethod
-    def _read_max_page(page) -> Optional[int]:
-        """Read the highest page number from a Zhihu pagination control."""
-        try:
-            value = page.evaluate(
-                """() => {
-                    const els = document.querySelectorAll(
-                        '.Pagination button, .Pagination a');
-                    let max = 0;
-                    els.forEach(e => {
-                        const n = parseInt(e.textContent, 10);
-                        if (!isNaN(n) && n > max) max = n;
-                    });
-                    return max;
-                }"""
-            )
-            return int(value) if value and value > 0 else None
-        except Exception:
-            return None
-
-    # Item links found inside a collection page (articles + answers + pins).
-    _COLLECTION_LINK_RE = (
-        r"(zhuanlan\.zhihu\.com/p/\d+|/question/\d+/answer/\d+|/answer/\d+"
-        r"|/pin/\d+)"
-    )
+    # Page size for the items APIs (columns/collections).
+    _API_PAGE_LIMIT = 20
 
     def _fetch_collection(self, target: ZhihuTarget) -> Iterator[ArchiveItem]:
-        # Collections are paginated (~20 items/page) via ?page=N, unlike columns
-        # and questions which lazy-load on scroll. Walk pages until one yields
-        # no new links, the detected last page is passed, or the cap is reached.
-        links, data = self._collect_collection_links(target.raw_url)
+        cid = target.collection_id
+        links = self._collect_api_item_urls(
+            f"https://www.zhihu.com/api/v4/collections/{cid}/items"
+            f"?offset=0&limit={self._API_PAGE_LIMIT}",
+            label="collection",
+        )
+        title = P.collection_title_from_api(
+            self._get_json(f"https://www.zhihu.com/api/v4/collections/{cid}")
+        )
         batch = self._make_batch(
-            BatchKind.COLLECTION, data, target.collection_id, target.raw_url
+            BatchKind.COLLECTION, title, cid, target.raw_url
         )
         yield from self._iter_item_links(links, batch)
-
-    def _collect_collection_links(
-        self, url: str
-    ) -> tuple[list[str], Optional[dict]]:
-        """Walk a collection's pages, collecting all item links.
-
-        Returns ``(links, page1_initial_data)`` — the first page's embedded data
-        is kept for resolving the collection's title.
-        """
-        base = zurls.strip_page(url)
-        cap = self._max_items()
-        all_links: list[str] = []
-        seen: set[str] = set()
-        first_data: Optional[dict] = None
-        max_page = 1
-        page_num = 1
-        while page_num <= max_page:
-            remaining = (cap - len(all_links)) if cap else None
-            if remaining is not None and remaining <= 0:
-                break
-            page_url = zurls.with_page(base, page_num)
-            links, data, detected_max = self._scroll_collect_links(
-                page_url, self._COLLECTION_LINK_RE, cap=remaining,
-                detect_max_page=True,
-            )
-            if page_num == 1:
-                first_data = data
-                # Trust the pager's reported last page as the upper bound.
-                if detected_max and detected_max > 1:
-                    max_page = detected_max
-                    log.info("collection has %d page(s)", max_page)
-            new = [h for h in links if h not in seen]
-            if not new:
-                log.debug("page %d yielded no new links; stopping", page_num)
-                break
-            for h in new:
-                seen.add(h)
-                all_links.append(h)
-            log.info(
-                "collection page %d/%d: +%d links (%d total)",
-                page_num, max_page, len(new), len(all_links),
-            )
-            page_num += 1
-        if cap:
-            all_links = all_links[:cap]
-        log.info(
-            "collected %d item links across %d page(s)",
-            len(all_links), min(page_num, max_page),
-        )
-        return all_links, first_data
 
     def _fetch_column(self, target: ZhihuTarget) -> Iterator[ArchiveItem]:
-        links, data, _ = self._scroll_collect_links(
-            target.raw_url, r"zhuanlan\.zhihu\.com/p/\d+"
+        cid = target.column_id
+        links = self._collect_api_item_urls(
+            f"https://www.zhihu.com/api/v4/columns/{cid}/items"
+            f"?limit={self._API_PAGE_LIMIT}&ws_qiangzhisafe=0&offset=0",
+            label="column",
         )
-        batch = self._make_batch(
-            BatchKind.COLUMN, data, target.column_id, target.raw_url
+        title = P.column_title_from_api(
+            self._get_json(f"https://www.zhihu.com/api/v4/columns/{cid}")
         )
+        batch = self._make_batch(BatchKind.COLUMN, title, cid, target.raw_url)
         yield from self._iter_item_links(links, batch)
 
+    def _collect_api_item_urls(self, first_url: str, *, label: str) -> list[str]:
+        """Page through a column/collection ``/items`` API, collecting URLs.
+
+        Walks ``offset``-paginated pages via ``paging.next`` until the API
+        reports the end, the configured ``max_items`` cap is reached, or a
+        request fails. Item URLs are deduped while preserving order.
+        """
+        cap = self._max_items()
+        urls: list[str] = []
+        seen: set[str] = set()
+        url: Optional[str] = first_url
+        page = 0
+        while url is not None:
+            if cap and len(urls) >= cap:
+                break
+            payload = self._get_json(url)
+            if not payload:
+                log.warning("%s items request failed; stopping at %d", label, len(urls))
+                break
+            page += 1
+            new = 0
+            for u in P.item_urls_from_api(payload):
+                if u in seen:
+                    continue
+                seen.add(u)
+                urls.append(u)
+                new += 1
+                if cap and len(urls) >= cap:
+                    break
+            log.info(
+                "%s page %d: +%d item(s) (%d total)", label, page, new, len(urls)
+            )
+            url = P.api_paging_next(payload)
+        if cap:
+            urls = urls[:cap]
+        log.info("collected %d %s item(s) across %d page(s)", len(urls), label, page)
+        return urls
+
     def _fetch_question_answers(self, target: ZhihuTarget) -> Iterator[ArchiveItem]:
-        links, data, _ = self._scroll_collect_links(
+        links, data = self._scroll_collect_links(
             target.raw_url, rf"/question/{target.question_id}/answer/\d+"
         )
-        batch = self._make_batch(
+        batch = self._make_batch_from_data(
             BatchKind.QUESTION, data, target.question_id, target.raw_url
         )
         yield from self._iter_item_links(links, batch)
@@ -399,18 +367,33 @@ class ZhihuSource(Source):
     def _make_batch(
         self,
         kind: BatchKind,
-        data: Optional[dict],
+        title: Optional[str],
         batch_id: Optional[str],
         url: str,
     ) -> BatchInfo:
-        """Build batch context, resolving the best available title."""
-        title = P.batch_title(data, kind.value, batch_id)
+        """Build batch context from an already-resolved title."""
         if not title:
             # Fall back to the batch id so a subdir always has a stable name.
             title = f"{kind.value}-{batch_id}" if batch_id else kind.value
             log.debug("no %s title found; using fallback %r", kind.value, title)
         log.info("batch %s: %r", kind.value, title)
         return BatchInfo(kind=kind, title=title, url=url, id=batch_id)
+
+    def _make_batch_from_data(
+        self,
+        kind: BatchKind,
+        data: Optional[dict],
+        batch_id: Optional[str],
+        url: str,
+    ) -> BatchInfo:
+        """Build batch context, resolving the title from page ``js-initialData``.
+
+        Used by question batches, which still scrape the rendered page.
+        """
+        return self._make_batch(
+            kind, P.batch_title(data, kind.value, batch_id), batch_id, url
+        )
+
 
     def _iter_item_links(
         self, links: list[str], batch: Optional[BatchInfo] = None

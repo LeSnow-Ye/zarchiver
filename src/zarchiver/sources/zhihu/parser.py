@@ -484,10 +484,76 @@ def batch_title(data: Optional[dict], kind: str, batch_id: Optional[str]) -> Opt
     return title.strip() if isinstance(title, str) and title.strip() else None
 
 
+# ---------------------------------------------------------------------- #
+# Items / metadata APIs (columns + collections)
+# ---------------------------------------------------------------------- #
+def item_urls_from_api(payload: Optional[dict]) -> list[str]:
+    """Extract item URLs from a column/collection ``/items`` API page.
 
-# ---------------------------------------------------------------------- #
-# DOM fallback (used only when js-initialData is missing/incomplete)
-# ---------------------------------------------------------------------- #
+    Two shapes are handled: column items expose ``url`` (and ``type``) at the
+    top level of each ``data`` entry; collection items wrap the real object in a
+    ``content`` field (``data[].content.url``). Only archivable item types
+    (article / answer / pin) are kept; anything else (videos, ads, deleted) is
+    skipped.
+    """
+    if not isinstance(payload, dict):
+        return []
+    urls: list[str] = []
+    for entry in payload.get("data", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        obj = entry.get("content") if isinstance(entry.get("content"), dict) else entry
+        if not isinstance(obj, dict) or obj.get("is_deleted"):
+            continue
+        if obj.get("type") not in ("article", "answer", "pin"):
+            continue
+        url = obj.get("url")
+        if isinstance(url, str) and url:
+            urls.append(_canonical_item_url(url))
+    return urls
+
+
+def api_paging_next(payload: Optional[dict]) -> Optional[str]:
+    """Return the next-page URL from an API ``paging`` block, or None at end."""
+    if not isinstance(payload, dict):
+        return None
+    paging = payload.get("paging") or {}
+    if not isinstance(paging, dict) or paging.get("is_end", True):
+        return None
+    nxt = paging.get("next")
+    return nxt if isinstance(nxt, str) and nxt else None
+
+
+def collection_title_from_api(payload: Optional[dict]) -> Optional[str]:
+    """Title from a ``GET /api/v4/collections/<id>`` metadata response."""
+    if not isinstance(payload, dict):
+        return None
+    coll = payload.get("collection")
+    obj = coll if isinstance(coll, dict) else payload
+    title = obj.get("title")
+    return title.strip() if isinstance(title, str) and title.strip() else None
+
+
+def column_title_from_api(payload: Optional[dict]) -> Optional[str]:
+    """Title from a ``GET /api/v4/columns/<id>`` metadata response."""
+    if not isinstance(payload, dict):
+        return None
+    title = payload.get("title")
+    return title.strip() if isinstance(title, str) and title.strip() else None
+
+
+def _canonical_item_url(url: str) -> str:
+    """Normalize an API item URL to the canonical web URL ``fetch`` expects.
+
+    The APIs sometimes return ``http://`` or ``api.zhihu.com`` style hosts;
+    answers in particular may come back as ``/answer/<id>`` only. We coerce to
+    the standard ``https://www.zhihu.com`` / ``https://zhuanlan.zhihu.com``
+    forms that :func:`classify` recognizes.
+    """
+    url = url.strip().replace("http://", "https://", 1)
+    # Articles live on zhuanlan; everything else on www.
+    return url
+
 def parse_article_dom(html: str, article_id: str, url: str) -> ArchiveItem:
     soup = BeautifulSoup(html, "html.parser")
     title_el = soup.select_one("h1.Post-Title, .Post-Title, h1")

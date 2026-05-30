@@ -83,26 +83,34 @@ Three Zhihu-specific structures need special handling, done in
   never reaches the HTML. The parser rebuilds a `参考` section from those markers
   and turns each inline marker into an anchor link to its entry.
 
-## Batch pages: scroll vs. pagination
+## Batch pages: APIs vs. scroll
 
-Columns and questions **lazy-load on scroll**: their answer/article cards don't
-always expose a clean `<a href>`, so zarchiver harvests candidate item URLs from
-three signals while scrolling:
+**Columns (专栏) and collections (收藏夹) use JSON list APIs** — far more
+reliable and faster than scraping the rendered page:
+
+- column items — `/api/v4/columns/{id}/items?limit=N&ws_qiangzhisafe=0&offset=M`
+- collection items — `/api/v4/collections/{id}/items?offset=M&limit=N`
+
+zarchiver pages through them (`offset`/`limit`) following `paging.next` until
+`paging.is_end`, the configured cap is reached, or a request fails. Each entry
+carries the item's canonical `url` and `type`; column items expose these at the
+top level, while collection items wrap them under a `content` object. Only
+archivable types (article / answer / pin) are kept — videos, ads, and deleted
+items are skipped — and the URLs are deduped before each one is fetched and
+parsed normally. Titles come from the matching metadata endpoint
+(`/api/v4/collections/{id}` → `collection.title`, `/api/v4/columns/{id}` →
+`title`). All of this goes through the browser context (`context.request`), so
+session cookies and the referer apply; transient edge 403s are retried.
+
+**Questions still lazy-load on scroll**: their answer cards don't always expose
+a clean `<a href>`, so zarchiver harvests candidate item URLs while scrolling
+from three signals:
 
 1. plain `<a href>` anchors,
 2. `meta[itemprop="url"]` tags,
 3. answer ids on `.AnswerItem[data-zop]`, reconstructed into answer URLs.
 
-It scrolls until no new links appear (or the configured cap is reached), then
-visits each item.
-
-Collections (收藏夹) are different: they are **paginated** (~20 items per page)
-via a `?page=N` query parameter, with a numbered pager that reveals the last
-page. zarchiver reads that last-page number, then walks `page=1, 2, …`,
-harvesting links from each page with the same three signals, until it (a) passes
-the last page, (b) hits a page with no new links, or (c) reaches the cap. So
-`zarchiver archive https://www.zhihu.com/collection/<id>` captures the whole
-collection, not just its first page.
+It scrolls until no new links appear (or the cap is reached), then visits each.
 
 ## Images and referer
 
