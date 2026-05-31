@@ -92,6 +92,8 @@ Options:
   with no subdirectory.
 - `--no-export` — ingest into the DB (with images + AI) but don't render any
   exporter; useful for bulk-collecting, then exporting in one pass later.
+- `--no-videos` — don't download embedded videos (keep a poster + link instead).
+- `--video-quality FHD|HD|SD|LD` — preferred video quality (default FHD).
 
 For batch URLs, zarchiver loads all entries — columns (专栏) and collections
 (收藏夹) via their JSON list APIs, questions by scrolling — then archives each
@@ -128,6 +130,25 @@ Comments render as a `## 评论 (N)` section at the end of each note: a threaded
 blockquote list in markdown, and styled, nested blocks in HTML. Each comment
 shows its author, date, and like count. Comments are not part of an item's
 content hash, so they don't affect duplicate detection.
+
+### Videos and GIFs
+
+Embedded media is archived locally alongside images:
+
+- **GIFs** — animated GIFs are downloaded as real `.gif` files (Zhihu sometimes
+  marks them with a static JPEG frame; zarchiver keeps the animation). They
+  render inline in both Obsidian and HTML.
+- **Videos** — `<a class="video-box">` embeds are resolved to a playable MP4 via
+  Zhihu's video API and downloaded into the item's assets. HTML gets a real
+  `<video>` player; Obsidian gets an `![[…mp4]]` embed (Obsidian plays embedded
+  video). The poster frame is saved too.
+
+Videos can be large (FHD is tens of MB). Choose a smaller quality with
+`archive.video_quality = "SD"` (or `--video-quality SD`), or skip downloading
+them entirely with `archive.download_videos = false` / `--no-videos` — in which
+case a video degrades to its poster image plus a link. If a video can't be
+resolved, it also falls back to the poster + link. All downloading happens at
+archive time; `export` stays fully offline.
 
 ## `export`
 

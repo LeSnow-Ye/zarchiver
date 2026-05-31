@@ -3,8 +3,11 @@
 from pathlib import Path
 
 from zarchiver.exporters.assets import (
+    _sniff_ext,
     collect_image_urls,
+    collect_media_urls,
     copy_assets,
+    filename_for,
     inline_from_asset_map,
     rewrite_with_asset_map,
 )
@@ -93,3 +96,60 @@ def test_inline_keeps_remote_when_missing(tmp_path):
     html = '<img src="https://x/a.png">'
     out = inline_from_asset_map(html, {}, tmp_path)
     assert "https://x/a.png" in out
+
+
+# ---------------------------------------------------------------------- #
+# Video / media support
+# ---------------------------------------------------------------------- #
+def test_collect_media_urls_includes_video_and_poster():
+    html = (
+        '<img src="https://x/a.jpg">'
+        '<video src="https://v/clip.mp4" poster="https://x/cover.jpg"></video>'
+    )
+    urls = collect_media_urls(html)
+    assert "https://x/a.jpg" in urls
+    assert "https://v/clip.mp4" in urls
+    assert "https://x/cover.jpg" in urls
+
+
+def test_collect_media_urls_source_children():
+    html = '<video><source src="https://v/clip.webm"></video>'
+    assert "https://v/clip.webm" in collect_media_urls(html)
+
+
+def test_collect_image_urls_ignores_video():
+    # The image-only collector stays images-only.
+    html = '<video src="https://v/clip.mp4"></video><img src="https://x/a.jpg">'
+    assert collect_image_urls(html) == ["https://x/a.jpg"]
+
+
+def test_rewrite_video_src_and_poster():
+    html = '<video src="https://v/clip.mp4" poster="https://x/cover.jpg"></video>'
+    amap = {
+        "https://v/clip.mp4": "k/abc.mp4",
+        "https://x/cover.jpg": "k/cover.jpg",
+    }
+    out, refs = rewrite_with_asset_map(html, amap, "assets")
+    assert 'src="assets/abc.mp4"' in out
+    assert 'poster="assets/cover.jpg"' in out
+    assert set(refs) == {"k/abc.mp4", "k/cover.jpg"}
+
+
+def test_rewrite_video_keeps_remote_when_missing():
+    html = '<video src="https://v/clip.mp4"></video>'
+    out, refs = rewrite_with_asset_map(html, {}, "assets")
+    assert "https://v/clip.mp4" in out
+    assert refs == []
+
+
+def test_filename_for_keeps_mp4_ext():
+    assert filename_for("https://v/clip.mp4?pkey=x").endswith(".mp4")
+
+
+def test_sniff_ext_mp4():
+    # 'ftyp' box at offset 4 marks an MP4.
+    assert _sniff_ext(b"\x00\x00\x00\x18ftypmp42") == ".mp4"
+
+
+def test_sniff_ext_webm():
+    assert _sniff_ext(b"\x1aE\xdf\xa3rest") == ".webm"

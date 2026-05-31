@@ -51,6 +51,8 @@ _TEMPLATE = """<!DOCTYPE html>
   .tags span {{ display: inline-block; background: #eef; color: #336;
     border-radius: 10px; padding: 1px 10px; margin: 2px; font-size: .8rem; }}
   article img {{ max-width: 100%; height: auto; }}
+  article video {{ max-width: 100%; height: auto; display: block;
+    margin: 1rem 0; background: #000; border-radius: 6px; }}
   article {{ font-size: 1.05rem; }}
   .title-image {{ width: 100%; max-height: 420px; object-fit: cover;
     border-radius: 6px; margin: 1rem 0; }}
@@ -155,14 +157,22 @@ class HtmlExporter(Exporter):
         has_formulas = render_formulas_html(soup)
         content_html = str(soup)
 
-        # Rewrite <img> offline from the pre-downloaded asset map. Either inline
-        # as base64 (self-contained) or rewrite to a sibling assets/ folder and
-        # copy the stored files in. Images missing from the map keep remote URLs.
+        # Rewrite media offline from the pre-downloaded asset map. Either inline
+        # images as base64 (self-contained) or rewrite to a sibling assets/
+        # folder and copy the stored files in. Videos are never base64-inlined
+        # (too large), so even in embed mode they're copied to assets/ and
+        # referenced relatively. Media missing from the map keeps remote URLs.
         if self.assets_root is not None:
             if self.config.embed_images:
                 content_html = inline_from_asset_map(
                     content_html, item.asset_map, self.assets_root
                 )
+                # Still localize <video> (and posters) to local files.
+                content_html, refs = rewrite_with_asset_map(
+                    content_html, item.asset_map, "assets"
+                )
+                if refs:
+                    copy_assets(refs, self.assets_root, assets_dir)
             else:
                 content_html, refs = rewrite_with_asset_map(
                     content_html, item.asset_map, "assets"

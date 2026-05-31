@@ -269,6 +269,16 @@ def archive(
         help="Ingest into the DB (with images + AI) but skip exporting; run "
         "`export` later to render Obsidian/HTML offline.",
     ),
+    no_videos: bool = typer.Option(
+        False,
+        "--no-videos",
+        help="Do not download embedded videos (keep a poster + link instead).",
+    ),
+    video_quality: Optional[str] = typer.Option(
+        None,
+        "--video-quality",
+        help="Preferred video quality: FHD | HD | SD | LD (default FHD).",
+    ),
 ):
     """Archive a single answer/article, or a batch (collection/column/question).
 
@@ -286,6 +296,10 @@ def archive(
         cfg.archive.comments = False
     if max_comments is not None:
         cfg.archive.max_comments = max_comments
+    if no_videos:
+        cfg.archive.download_videos = False
+    if video_quality:
+        cfg.archive.video_quality = video_quality.strip().upper()
     target = classify(url)
     source = ZhihuSource(cfg)
     pipeline, store = _build_pipeline(

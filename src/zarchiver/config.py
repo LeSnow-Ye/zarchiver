@@ -106,6 +106,11 @@ class ArchiveConfig:
     # Max comments to record per item, including child replies (0 = unlimited).
     # Popular content can have thousands of comments, so this is capped.
     max_comments: int = 100
+    # Download embedded videos (<a class="video-box">) as MP4 files. When off,
+    # videos degrade to a poster image + a link.
+    download_videos: bool = True
+    # Preferred video quality when downloading: FHD | HD | SD | LD.
+    video_quality: str = "FHD"
 
 
 @dataclass
@@ -150,6 +155,8 @@ class Config:
             self.archive.auto_export = [
                 p.strip() for p in v.split(",") if p.strip()
             ]
+        if v := env.get("ZARCHIVER_VIDEO_QUALITY"):
+            self.archive.video_quality = v.strip().upper()
         if (v := env.get("ZARCHIVER_HEADLESS")) is not None:
             self.browser.headless = v.strip().lower() in ("1", "true", "yes")
 

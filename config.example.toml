@@ -11,6 +11,7 @@
 #   ZARCHIVER_DB          -> archive.db_path
 #   ZARCHIVER_ASSETS_ROOT -> archive.assets_root
 #   ZARCHIVER_AUTO_EXPORT -> archive.auto_export (comma-separated, e.g. "obsidian,html")
+#   ZARCHIVER_VIDEO_QUALITY -> archive.video_quality (FHD|HD|SD|LD)
 #   ZARCHIVER_HEADLESS    -> browser.headless ("1"/"true" to force headless)
 
 [archive]
@@ -31,6 +32,12 @@ comments = true
 # Max comments to record per item, counting child replies (0 = unlimited).
 # Popular content can have thousands, so the default is capped.
 max_comments = 100
+# Download embedded videos (<a class="video-box">) as MP4 files so they play
+# offline. Turn off to keep just a poster image + link (saves space/bandwidth).
+download_videos = true
+# Preferred video quality when downloading: FHD | HD | SD | LD. Falls back to
+# the nearest available. FHD can be tens of MB per video.
+video_quality = "FHD"
 
 [browser]
 # Zhihu blocks headless chrome-headless-shell. Keep this false (headful).

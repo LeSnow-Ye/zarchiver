@@ -23,7 +23,7 @@ from typing import Optional
 from zarchiver.ai import Summarizer
 from zarchiver.exporters.assets import (
     Fetcher,
-    collect_image_urls,
+    collect_media_urls,
     download_images,
     filename_for,
 )
@@ -95,8 +95,8 @@ class Ingestor:
                     seen.add(u)
                     urls.append(u)
 
-        add(collect_image_urls(item.content_html))
-        add(collect_image_urls(_comment_html(item.comments)))
+        add(collect_media_urls(item.content_html))
+        add(collect_media_urls(_comment_html(item.comments)))
         if item.title_image and item.title_image not in seen:
             seen.add(item.title_image)
             urls.append(item.title_image)

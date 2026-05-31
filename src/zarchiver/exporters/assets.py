@@ -35,6 +35,10 @@ _EXT_BY_MIME = {
     "image/svg+xml": ".svg",
 }
 
+# Local-filename extensions we keep as-is from a URL (images + video). Anything
+# else is dropped and re-derived from content at download time.
+_KNOWN_EXTS = set(_EXT_BY_MIME.values()) | {".mp4", ".webm", ".mov", ".m4v"}
+
 # Lazy-load attributes Zhihu adds to <img>; stripped once we set an authoritative
 # src so the rewritten value wins.
 _LAZY_ATTRS = (
@@ -58,10 +62,10 @@ def _best_src(img) -> Optional[str]:
 
 
 def _filename_for(url: str) -> str:
-    """Deterministic local filename for an image URL (hash + extension)."""
+    """Deterministic local filename for a media URL (hash + extension)."""
     digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
     ext = Path(url.split("?")[0]).suffix.lower()
-    if ext not in _EXT_BY_MIME.values():
+    if ext not in _KNOWN_EXTS:
         ext = ""  # resolved from content-type at download time if unknown
     return f"{digest}{ext}"
 
@@ -144,6 +148,12 @@ def _sniff_ext(data: bytes) -> Optional[str]:
         return ".gif"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return ".webp"
+    # ISO base media (mp4): a 'ftyp' box near the start.
+    if data[4:8] == b"ftyp":
+        return ".mp4"
+    # WebM/Matroska EBML header.
+    if data[:4] == b"\x1aE\xdf\xa3":
+        return ".webm"
     return None
 
 
@@ -167,6 +177,46 @@ def collect_image_urls(html: str) -> list[str]:
     return urls
 
 
+def _video_urls(tag) -> list[str]:
+    """All downloadable URLs on a <video>: poster, src, and <source> children."""
+    found: list[str] = []
+    poster = tag.get("poster")
+    if poster and not poster.startswith("data:"):
+        found.append(poster)
+    src = tag.get("src")
+    if src and not src.startswith("data:"):
+        found.append(src)
+    for source in tag.find_all("source"):
+        s = source.get("src")
+        if s and not s.startswith("data:"):
+            found.append(s)
+    return found
+
+
+def collect_media_urls(html: str) -> list[str]:
+    """De-duplicated URLs of every downloadable asset in ``html``.
+
+    Covers ``<img>`` (via :func:`collect_image_urls`) plus ``<video>`` posters,
+    ``src`` attributes, and ``<source>`` children — so ingest downloads videos
+    and their poster frames alongside images.
+    """
+    soup = BeautifulSoup(html or "", "html.parser")
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add(url: Optional[str]) -> None:
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+
+    for img in soup.find_all("img"):
+        add(_best_src(img))
+    for vid in soup.find_all("video"):
+        for u in _video_urls(vid):
+            add(u)
+    return urls
+
+
 def filename_for(url: str) -> str:
     """Public, deterministic local filename for an image URL (hash + ext)."""
     return _filename_for(url)
@@ -180,34 +230,47 @@ def rewrite_with_asset_map(
     asset_map: dict[str, str],
     rel_prefix: str,
 ) -> tuple[str, list[str]]:
-    """Rewrite ``<img>`` srcs using a remote-URL → stored-path ``asset_map``.
+    """Rewrite ``<img>``/``<video>`` srcs using a remote-URL → stored-path map.
 
-    For each image whose URL is in the map, the src becomes
-    ``{rel_prefix}/{filename}`` (the basename of the stored path) and the stored
-    relative path is collected so the caller can copy the file into the
-    exporter's assets dir. Images NOT in the map keep their remote URL as a
-    graceful, fully-offline degradation (no network access here).
+    For each media URL in the map, the attribute becomes ``{rel_prefix}/{name}``
+    (the basename of the stored path) and the stored relative path is collected
+    so the caller can copy the file into the exporter's assets dir. URLs NOT in
+    the map keep their remote value as a graceful, fully-offline degradation (no
+    network access here). Covers ``<img src>``, ``<video src>``,
+    ``<video poster>``, and ``<source src>``.
 
     Returns ``(rewritten_html, [stored_relative_path, ...])``.
     """
     soup = BeautifulSoup(html or "", "html.parser")
     referenced: list[str] = []
     seen: set[str] = set()
+
+    def local_for(url: str) -> Optional[str]:
+        stored = asset_map.get(url)
+        if not stored:
+            return None
+        if stored not in seen:
+            seen.add(stored)
+            referenced.append(stored)
+        name = Path(stored).name
+        return f"{rel_prefix}/{name}" if rel_prefix else name
+
     for img in soup.find_all("img"):
         url = _best_src(img)
         if not url:
             continue
-        stored = asset_map.get(url)
-        if stored:
-            fname = Path(stored).name
-            img["src"] = f"{rel_prefix}/{fname}" if rel_prefix else fname
-            if stored not in seen:
-                seen.add(stored)
-                referenced.append(stored)
-        else:
-            # Not downloaded at ingest: keep the best remote URL as-is.
-            img["src"] = url
+        img["src"] = local_for(url) or url
         _strip_lazy_attrs(img)
+
+    for vid in soup.find_all("video"):
+        if vid.get("poster"):
+            vid["poster"] = local_for(vid["poster"]) or vid["poster"]
+        if vid.get("src"):
+            vid["src"] = local_for(vid["src"]) or vid["src"]
+        for source in vid.find_all("source"):
+            if source.get("src"):
+                source["src"] = local_for(source["src"]) or source["src"]
+
     return str(soup), referenced
 
 

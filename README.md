@@ -34,7 +34,8 @@ localization, AI summaries/tags via DeepSeek, and content-hash dedup. See
   network access — re-render anytime without re-fetching.
 - **Faithful content.** Math is preserved as real LaTeX (`$...$` in markdown,
   MathJax in HTML) rather than images; article title images and footnote
-  references are captured too.
+  references are captured too. Animated GIFs stay animated, and embedded videos
+  are downloaded as MP4 and played inline (offline).
 - **Comments.** Each item's comments (root + replies, threaded) are recorded and
   rendered as a `评论` section, capped at 100 per item by default.
 - **AI assist.** Summaries, tags, and a category are generated per item via an

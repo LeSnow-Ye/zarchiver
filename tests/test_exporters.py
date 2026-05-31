@@ -434,5 +434,82 @@ def test_no_comment_section_when_empty(tmp_path):
     assert "## 评论" not in body
 
 
+# ---------------------------------------------------------------------- #
+# Video rendering
+# ---------------------------------------------------------------------- #
+def _video_item() -> ArchiveItem:
+    item = _sample_item()
+    item.content_html = (
+        '<p>看视频</p>'
+        '<video src="https://v/clip.mp4" poster="https://x/cover.jpg" '
+        'controls preload="metadata"></video>'
+    )
+    return item
+
+
+def test_html_renders_local_video(tmp_path):
+    assets_root = tmp_path / "assets"
+    cfg = HtmlConfig(output_path=str(tmp_path / "h"))
+    item = _video_item()
+    mp4 = _seed_asset(assets_root, item.key, "https://v/clip.mp4", "clip.mp4")
+    cov = _seed_asset(assets_root, item.key, "https://x/cover.jpg", "cover.jpg")
+    item.asset_map = {
+        "https://v/clip.mp4": mp4,
+        "https://x/cover.jpg": cov,
+    }
+    doc = (
+        HtmlExporter(cfg, assets_root=str(assets_root))
+        .export(item)
+        .path.read_text(encoding="utf-8")
+    )
+    assert "<video" in doc
+    assert 'src="assets/clip.mp4"' in doc
+    assert 'poster="assets/cover.jpg"' in doc
+    # The mp4 + poster were copied into the output assets dir.
+    assert (tmp_path / "h" / "assets" / "clip.mp4").is_file()
+    assert (tmp_path / "h" / "assets" / "cover.jpg").is_file()
+
+
+def test_html_video_keeps_remote_when_unmapped(tmp_path):
+    cfg = HtmlConfig(output_path=str(tmp_path / "h"))
+    item = _video_item()  # empty asset_map
+    doc = (
+        HtmlExporter(cfg, assets_root=str(tmp_path / "assets"))
+        .export(item)
+        .path.read_text(encoding="utf-8")
+    )
+    assert "https://v/clip.mp4" in doc  # offline degrade, no fetch
+
+
+def test_obsidian_renders_video_embed(tmp_path):
+    assets_root = tmp_path / "assets"
+    cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=True)
+    item = _video_item()
+    mp4 = _seed_asset(assets_root, item.key, "https://v/clip.mp4", "clip.mp4")
+    item.asset_map = {"https://v/clip.mp4": mp4}
+    body = (
+        ObsidianExporter(cfg, assets_root=str(assets_root))
+        .export(item)
+        .path.read_text(encoding="utf-8")
+        .split("---\n", 2)[2]
+    )
+    # Obsidian embed syntax for the locally-stored mp4.
+    assert "![[" in body and "clip.mp4]]" in body
+    assert (tmp_path / "v" / "Zhihu" / "assets" / "clip.mp4").is_file()
+
+
+def test_obsidian_video_link_when_remote(tmp_path):
+    cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=True)
+    item = _video_item()  # empty asset_map → remote
+    body = (
+        ObsidianExporter(cfg, assets_root=str(tmp_path / "assets"))
+        .export(item)
+        .path.read_text(encoding="utf-8")
+    )
+    # Remote video survives as a link rather than being dropped by markdownify.
+    assert "https://v/clip.mp4" in body
+    assert "🎬" in body
+
+
 
 

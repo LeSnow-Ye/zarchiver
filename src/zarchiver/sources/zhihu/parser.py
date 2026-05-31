@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 from bs4 import BeautifulSoup
@@ -24,18 +24,30 @@ from zarchiver.sources.zhihu import urls as zurls
 
 PLATFORM = "zhihu"
 
+# Resolves a Zhihu video lens-id to {"url","cover","title","quality"} or None.
+# Injected by the source (which has the browser session); None disables video
+# resolution (the box degrades to a poster + label), keeping parsing offline.
+VideoResolver = Callable[[str], Optional[dict]]
+
 
 # ---------------------------------------------------------------------- #
 # Content normalization (Zhihu-specific HTML quirks)
 # ---------------------------------------------------------------------- #
-def clean_content_html(html: str) -> str:
+def clean_content_html(
+    html: str, *, video_resolver: Optional["VideoResolver"] = None
+) -> str:
     """Normalize Zhihu's content HTML before it reaches generic exporters.
 
     * Convert equation images (``equation?tex=...``) into ``<span class="ztex"
       data-tex="..." data-block="...">`` so exporters can render real LaTeX
       (markdown ``$...$`` / MathJax) instead of downloading them as images.
+    * Fix animated GIFs: Zhihu marks some ``<img>`` with an animated ``.gif``
+      ``src`` but a *static* ``data-original`` JPEG frame. Prefer the ``.gif``
+      so the asset pipeline downloads the animation, not a still.
+    * Turn ``<a class="video-box">`` embeds into a real ``<video>`` (downloading
+      the MP4) when a ``video_resolver`` is supplied; otherwise leave a readable
+      poster + label.
     * Unwrap ``link.zhihu.com/?target=<encoded>`` redirects to the real URL.
-    * Turn ``<a class="video-box">`` embeds into a readable poster + label.
     * Rebuild the reference list from inline ``<sup data-draft-type="reference">``
       markers (Zhihu renders that list client-side, so it's absent here).
     * Drop ``<noscript>`` duplicates.
@@ -48,24 +60,8 @@ def clean_content_html(html: str) -> str:
         ns.decompose()
 
     _normalize_formulas(soup)
-
-    # Video boxes: replace with poster image + a labelled link.
-    for box in soup.select("a.video-box"):
-        href = box.get("href", "")
-        real = _unwrap_redirect(href)
-        poster = box.get("data-poster")
-        box.attrs = {"href": real} if real else {}
-        box.clear()
-        box.string = ""
-        new_content = []
-        if poster:
-            img = soup.new_tag("img", src=poster)
-            new_content.append(img)
-        label = soup.new_tag("span")
-        label.string = "🎬 视频"
-        new_content.append(label)
-        for node in new_content:
-            box.append(node)
+    _normalize_gifs(soup)
+    _normalize_videos(soup, video_resolver)
 
     # Unwrap remaining link.zhihu.com redirects.
     for a in soup.find_all("a", href=True):
@@ -76,6 +72,114 @@ def clean_content_html(html: str) -> str:
     _append_references(soup)
 
     return str(soup)
+
+
+_GIF_RE = re.compile(r"\.gif(?:\?|$)", re.IGNORECASE)
+
+
+def _normalize_gifs(soup: BeautifulSoup) -> None:
+    """Ensure animated GIFs keep their ``.gif`` source, not a static frame.
+
+    Zhihu's "gif2mp4" images carry the animated GIF in ``src`` (``..._1440w.gif``)
+    but a static JPEG in ``data-original``. Since the asset pipeline prefers
+    ``data-original``, it would otherwise save a still. When an ``<img>`` has a
+    ``.gif`` anywhere in its src/original/token, we force ``src`` to the ``.gif``
+    and drop the static ``data-original``/``data-thumbnail`` so the animation is
+    what gets downloaded.
+    """
+    for img in soup.find_all("img"):
+        src = img.get("src") or ""
+        original = img.get("data-original") or ""
+        gif_url = None
+        if _GIF_RE.search(src):
+            gif_url = src
+        elif _GIF_RE.search(original):
+            gif_url = original
+        else:
+            # data-thumbnail present + a token implies an animated image whose
+            # .gif lives at <token>_1440w.gif on the same CDN host.
+            token = img.get("data-original-token")
+            thumb = img.get("data-thumbnail") or ""
+            if token and thumb:
+                base = re.sub(r"/[^/]+$", "", thumb)
+                if base:
+                    gif_url = f"{base}/{token}_1440w.gif"
+        if not gif_url:
+            continue
+        img["src"] = gif_url
+        for attr in ("data-original", "data-thumbnail", "data-actualsrc",
+                     "srcset"):
+            if img.has_attr(attr):
+                del img[attr]
+        classes = [c for c in (img.get("class") or []) if c]
+        if "zarchiver-gif" not in classes:
+            classes.append("zarchiver-gif")
+        img["class"] = classes
+
+
+def _video_lens_id(box) -> Optional[str]:
+    """Extract a video lens-id from a video-box anchor."""
+    lid = box.get("data-lens-id")
+    if lid:
+        return lid
+    href = box.get("href", "")
+    real = _unwrap_redirect(href) or href
+    m = re.search(r"/video/(\d+)", real or "")
+    return m.group(1) if m else None
+
+
+def _normalize_videos(
+    soup: BeautifulSoup, video_resolver: Optional["VideoResolver"]
+) -> None:
+    """Rewrite ``<a class="video-box">`` embeds.
+
+    With a resolver, replace the box with a real ``<video>`` (poster + MP4 src)
+    so the asset pipeline downloads the MP4 and exporters can play it offline.
+    Without one (or on resolution failure), fall back to a poster image plus a
+    labelled link — the original, offline-safe behavior.
+    """
+    for box in soup.select("a.video-box"):
+        href = box.get("href", "")
+        real = _unwrap_redirect(href)
+        poster = box.get("data-poster")
+        name = box.get("data-name") or ""
+        lens_id = _video_lens_id(box)
+
+        resolved = None
+        if video_resolver is not None and lens_id:
+            try:
+                resolved = video_resolver(lens_id)
+            except Exception:  # resolution must never break parsing
+                resolved = None
+
+        if resolved and resolved.get("url"):
+            video = soup.new_tag("video")
+            video["src"] = resolved["url"]
+            video["controls"] = ""
+            video["preload"] = "metadata"
+            if resolved.get("cover") or poster:
+                video["poster"] = resolved.get("cover") or poster
+            if lens_id:
+                video["data-zhihu-video"] = lens_id
+            title = resolved.get("title") or name
+            box.replace_with(video)
+            if title:
+                cap = soup.new_tag("p")
+                cap.string = f"🎬 {title}"
+                video.insert_after(cap)
+            continue
+
+        # Fallback: poster image + labelled link (offline-safe).
+        box.attrs = {"href": real} if real else {}
+        box.clear()
+        new_content = []
+        if poster:
+            new_content.append(soup.new_tag("img", src=poster))
+        label = soup.new_tag("span")
+        label.string = f"🎬 视频{f'：{name}' if name else ''}"
+        new_content.append(label)
+        for node in new_content:
+            box.append(node)
 
 
 _EQUATION_RE = re.compile(r"equation\?tex=(?P<tex>.*)$")
@@ -247,7 +351,12 @@ def _clean_image_url(url: Optional[str]) -> Optional[str]:
 # ---------------------------------------------------------------------- #
 # Article
 # ---------------------------------------------------------------------- #
-def parse_article(data: dict, article_id: str) -> ArchiveItem:
+def parse_article(
+    data: dict,
+    article_id: str,
+    *,
+    video_resolver: Optional["VideoResolver"] = None,
+) -> ArchiveItem:
     articles = _entities(data).get("articles", {})
     raw = articles.get(str(article_id))
     if not raw:
@@ -266,7 +375,9 @@ def parse_article(data: dict, article_id: str) -> ArchiveItem:
         source_id=str(raw.get("id") or article_id),
         url=zurls.article_url(str(raw.get("id") or article_id)),
         title=raw.get("title") or "(untitled)",
-        content_html=clean_content_html(raw.get("content") or ""),
+        content_html=clean_content_html(
+            raw.get("content") or "", video_resolver=video_resolver
+        ),
         author=_make_author(raw.get("author")),
         created=ArchiveItem.epoch_to_dt(raw.get("created")),
         updated=ArchiveItem.epoch_to_dt(raw.get("updated")),
@@ -285,7 +396,12 @@ def parse_article(data: dict, article_id: str) -> ArchiveItem:
 # ---------------------------------------------------------------------- #
 # Pin (想法) — a short post: ordered text + image blocks, no real title.
 # ---------------------------------------------------------------------- #
-def parse_pin(data: dict, pin_id: str) -> ArchiveItem:
+def parse_pin(
+    data: dict,
+    pin_id: str,
+    *,
+    video_resolver: Optional["VideoResolver"] = None,
+) -> ArchiveItem:
     pins = _entities(data).get("pins", {})
     raw = pins.get(str(pin_id))
     if not raw:
@@ -306,7 +422,9 @@ def parse_pin(data: dict, pin_id: str) -> ArchiveItem:
         source_id=pid,
         url=zurls.pin_url(pid),
         title=title,
-        content_html=clean_content_html(content_html),
+        content_html=clean_content_html(
+            content_html, video_resolver=video_resolver
+        ),
         author=author,
         created=ArchiveItem.epoch_to_dt(raw.get("created")),
         updated=ArchiveItem.epoch_to_dt(raw.get("updated")),
@@ -403,7 +521,11 @@ def _strip_html(html: str) -> str:
 # Answer
 # ---------------------------------------------------------------------- #
 def parse_answer(
-    data: dict, answer_id: str, question_id: Optional[str] = None
+    data: dict,
+    answer_id: str,
+    question_id: Optional[str] = None,
+    *,
+    video_resolver: Optional["VideoResolver"] = None,
 ) -> ArchiveItem:
     answers = _entities(data).get("answers", {})
     raw = answers.get(str(answer_id))
@@ -424,7 +546,9 @@ def parse_answer(
             f"https://www.zhihu.com/answer/{raw.get('id') or answer_id}",
         # An answer's "title" is its parent question — most useful for filing.
         title=q_title,
-        content_html=clean_content_html(raw.get("content") or ""),
+        content_html=clean_content_html(
+            raw.get("content") or "", video_resolver=video_resolver
+        ),
         author=_make_author(raw.get("author")),
         created=ArchiveItem.epoch_to_dt(raw.get("createdTime") or raw.get("created")),
         updated=ArchiveItem.epoch_to_dt(raw.get("updatedTime") or raw.get("updated")),

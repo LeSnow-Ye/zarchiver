@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+from bs4 import BeautifulSoup
 from markdownify import markdownify as md_convert
 
 from zarchiver.config import ObsidianConfig
@@ -120,8 +121,8 @@ class ObsidianExporter(Exporter):
         # markdownify can't escape LaTeX-significant characters.
         body_html, formulas = extract_formulas_for_markdown(body_html)
 
-        # Rewrite <img> from the pre-downloaded asset map (offline). Images not
-        # in the map keep their remote URL as a graceful degradation.
+        # Rewrite <img>/<video> from the pre-downloaded asset map (offline).
+        # Media not in the map keeps its remote URL as a graceful degradation.
         if self.config.download_images and self.assets_root is not None:
             rel_prefix = self._assets_rel_prefix(notes_dir, assets_dir)
             body_html, refs = rewrite_with_asset_map(
@@ -129,6 +130,10 @@ class ObsidianExporter(Exporter):
             )
             if refs:
                 copy_assets(refs, self.assets_root, assets_dir)
+
+        # markdownify drops <video>; convert each to an Obsidian embed/link first
+        # so videos survive into the note.
+        body_html = _videos_to_embeds(body_html)
 
         body_md = md_convert(body_html, heading_style="ATX", bullets="-")
         body_md = restore_formulas_markdown(body_md, formulas)
@@ -253,3 +258,36 @@ def _tidy_markdown(md: str) -> str:
     """Collapse excessive blank lines markdownify can leave behind."""
     md = re.sub(r"\n{3,}", "\n\n", md)
     return md.strip()
+
+
+def _videos_to_embeds(html: str) -> str:
+    """Replace ``<video>`` tags with Obsidian-friendly markup before markdownify.
+
+    markdownify silently drops ``<video>``. A locally-stored video (its ``src``
+    already rewritten to a relative ``assets/...`` path) becomes an Obsidian
+    embed ``![[assets/x.mp4]]`` (Obsidian plays embedded video); a still-remote
+    video becomes a plain link so it isn't lost. A poster image, if present, is
+    kept as a preview image above it.
+    """
+    if "<video" not in html:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+    for vid in soup.find_all("video"):
+        src = vid.get("src")
+        if not src:
+            source = vid.find("source")
+            src = source.get("src") if source else None
+        poster = vid.get("poster")
+        replacement = []
+        is_local = bool(src) and not src.startswith(("http://", "https://"))
+        if poster and not poster.startswith(("http://", "https://")):
+            replacement.append(f"![]({poster})")
+        if src:
+            if is_local:
+                replacement.append(f"![[{src}]]")
+            else:
+                replacement.append(f"[🎬 视频]({src})")
+        else:
+            replacement.append("🎬 视频")
+        vid.replace_with(BeautifulSoup("\n\n".join(replacement), "html.parser"))
+    return str(soup)

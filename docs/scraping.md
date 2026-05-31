@@ -83,6 +83,31 @@ Three Zhihu-specific structures need special handling, done in
   never reaches the HTML. The parser rebuilds a `参考` section from those markers
   and turns each inline marker into an anchor link to its entry.
 
+## Videos and GIFs
+
+Zhihu encodes animated/video media three ways in the raw `content`, handled in
+`parser.clean_content_html` (+ `sources/zhihu/video.py`):
+
+- **Plain GIF** — `<img class="content_image" src="…_1440w.gif" data-thumbnail=…>`
+  with no `data-original`. The `_1440w.gif` is the real animation; the normal
+  image pipeline downloads it. Works as-is.
+- **"gif2mp4" GIF** — `<img src="…_1440w.gif" data-original="…_r.jpg" data-thumbnail=…>`
+  where `data-original` is a *static* JPEG frame. The asset pipeline prefers
+  `data-original`, so without intervention it would save a still. `_normalize_gifs`
+  forces `src` to the `.gif` and drops the static `data-original`, so the
+  animation is what gets downloaded. (In the rendered DOM these play as a
+  `vzuu.com` MP4, but that URL needs a per-session signature, so the `.gif` —
+  which any `<token>{_1440w,_r,_b}.gif` variant serves identically — is used.)
+- **Real video** — `<a class="video-box" data-lens-id="<id>" data-poster="…">`.
+  The actual MP4 isn't in the page; `video.resolve_video` calls
+  `GET https://lens.zhihu.com/api/v4/videos/<id>` (note: the `lens.` host, not
+  `www.`) to get a `playlist` of quality variants (`FHD`/`HD`/`SD`/`LD`), each a
+  signed `play_url` on `*.vzuu.com`, plus `cover_url` + `title`. The parser
+  rewrites the box into a `<video poster=… src=<mp4>>`; ingest downloads the MP4
+  (its `play_url` signature is short-lived, so it's fetched right away with the
+  standard Zhihu referer). Quality is configurable; resolution failures degrade
+  to a poster + link.
+
 ## Batch pages: APIs vs. scroll
 
 **Columns (专栏) and collections (收藏夹) use JSON list APIs** — far more

@@ -253,6 +253,7 @@ def test_clean_content_unwraps_redirect():
 
 
 def test_clean_content_video_box():
+    # Without a resolver, a video box degrades to poster + label + link.
     html = (
         '<a class="video-box" '
         'href="https://link.zhihu.com/?target=https%3A//www.zhihu.com/video/1" '
@@ -262,6 +263,85 @@ def test_clean_content_video_box():
     assert "🎬 视频" in out
     assert "pic.zhimg.com/p.jpg" in out
     assert "www.zhihu.com/video/1" in out
+    assert "<video" not in out
+
+
+def test_clean_content_video_resolved():
+    # With a resolver, the box becomes a real <video> pointing at the MP4.
+    html = (
+        '<a class="video-box" data-lens-id="555" data-name="演示" '
+        'href="https://link.zhihu.com/?target=https%3A//www.zhihu.com/video/555" '
+        'data-poster="https://pic.zhimg.com/p.jpg"></a>'
+    )
+
+    def resolver(lens_id):
+        assert lens_id == "555"
+        return {
+            "url": "https://vdn.vzuu.com/FHD/x.mp4?pkey=k",
+            "cover": "https://pic.zhimg.com/cover.jpg",
+            "title": "演示视频",
+            "quality": "FHD",
+        }
+
+    out = P.clean_content_html(html, video_resolver=resolver)
+    assert "<video" in out
+    assert "vdn.vzuu.com/FHD/x.mp4" in out
+    assert 'poster="https://pic.zhimg.com/cover.jpg"' in out
+    assert 'data-zhihu-video="555"' in out
+    assert "🎬 演示视频" in out
+    assert "video-box" not in out
+
+
+def test_clean_content_video_resolver_failure_falls_back():
+    html = (
+        '<a class="video-box" data-lens-id="9" '
+        'data-poster="https://pic.zhimg.com/p.jpg"></a>'
+    )
+    out = P.clean_content_html(html, video_resolver=lambda _id: None)
+    assert "<video" not in out
+    assert "🎬 视频" in out
+    assert "pic.zhimg.com/p.jpg" in out
+
+
+# ---------------------------------------------------------------------- #
+# Animated GIFs: keep the .gif src, not the static data-original frame
+# ---------------------------------------------------------------------- #
+def test_clean_content_gif2mp4_prefers_gif():
+    # gif2mp4: animated .gif in src, static .jpg in data-original.
+    html = (
+        '<figure><img class="origin_image" '
+        'src="https://pic3.zhimg.com/v2-abc_1440w.gif" '
+        'data-original="https://pic3.zhimg.com/v2-abc_r.jpg" '
+        'data-thumbnail="https://pic3.zhimg.com/v2-abc_b.jpg" '
+        'data-original-token="v2-abc"></figure>'
+    )
+    out = P.clean_content_html(html)
+    assert "v2-abc_1440w.gif" in out
+    assert "_r.jpg" not in out  # static frame dropped
+    assert "data-original=" not in out
+    assert "zarchiver-gif" in out
+
+
+def test_clean_content_plain_gif_kept():
+    html = (
+        '<img class="content_image" '
+        'src="https://pic4.zhimg.com/v2-xyz_1440w.gif" '
+        'data-thumbnail="https://pic4.zhimg.com/v2-xyz_b.jpg" '
+        'data-original-token="v2-xyz">'
+    )
+    out = P.clean_content_html(html)
+    assert "v2-xyz_1440w.gif" in out
+
+
+def test_clean_content_static_image_untouched():
+    html = (
+        '<img src="https://pic1.zhimg.com/v2-q_1440w.jpg" '
+        'data-original="https://pic1.zhimg.com/v2-q_r.jpg">'
+    )
+    out = P.clean_content_html(html)
+    # No .gif anywhere → left exactly as a normal image (data-original kept).
+    assert "zarchiver-gif" not in out
+    assert "v2-q_r.jpg" in out
 
 
 # ---------------------------------------------------------------------- #
@@ -311,6 +391,51 @@ def test_parse_article_title_image_fixture():
     # Formulas converted, none left as images.
     assert "equation?tex=" not in item.content_html
     assert item.content_html.count('class="ztex"') > 10
+
+
+def test_parse_article_gif_fixture():
+    path = FIXTURES / "article_gif_679061686.html"
+    if not path.is_file():
+        pytest.skip("gif fixture not captured")
+    data = P.extract_initial_data(path.read_text(encoding="utf-8"))
+    item = P.parse_article(data, "679061686")
+    # Animated GIFs keep their .gif source (not the static _r.jpg frame).
+    assert ".gif" in item.content_html
+    assert "zarchiver-gif" in item.content_html
+    # Every animated (zarchiver-gif) <img> points at a .gif, and none of them
+    # kept a static data-original frame. (Plain static images are untouched.)
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(item.content_html, "html.parser")
+    gif_imgs = soup.select("img.zarchiver-gif")
+    assert gif_imgs, "expected at least one animated gif image"
+    for img in gif_imgs:
+        assert ".gif" in (img.get("src") or "")
+        assert not img.get("data-original")
+
+
+def test_parse_article_video_fixture():
+    path = FIXTURES / "article_video_1993765835039342710.html"
+    if not path.is_file():
+        pytest.skip("video fixture not captured")
+    data = P.extract_initial_data(path.read_text(encoding="utf-8"))
+
+    def resolver(lens_id):
+        return {
+            "url": f"https://vdn.vzuu.com/FHD/{lens_id}.mp4?pkey=k",
+            "cover": "https://pic.zhimg.com/cover.jpg",
+            "title": "演示",
+            "quality": "FHD",
+        }
+
+    item = P.parse_article(data, "1993765835039342710", video_resolver=resolver)
+    assert "<video" in item.content_html
+    assert "vzuu.com" in item.content_html and ".mp4" in item.content_html
+    assert "video-box" not in item.content_html
+    # Without a resolver, it degrades gracefully (no <video>, keeps a label).
+    item2 = P.parse_article(data, "1993765835039342710")
+    assert "<video" not in item2.content_html
+    assert "🎬" in item2.content_html
 
 
 # ---------------------------------------------------------------------- #

@@ -20,6 +20,7 @@ from zarchiver.sources.base import Source, SourceError
 from zarchiver.sources.zhihu import comments as C
 from zarchiver.sources.zhihu import parser as P
 from zarchiver.sources.zhihu import urls as zurls
+from zarchiver.sources.zhihu import video as V
 from zarchiver.sources.zhihu.browser import ZhihuBrowser
 from zarchiver.sources.zhihu.urls import ZhihuKind, ZhihuTarget
 
@@ -130,6 +131,17 @@ class ZhihuSource(Source):
                 return None
         return None
 
+    def _video_resolver(self):
+        """Build a video resolver bound to this session, or None if disabled."""
+        if not self.config.archive.download_videos:
+            return None
+        quality = self.config.archive.video_quality
+
+        def resolve(lens_id: str) -> Optional[dict]:
+            return V.resolve_video(self._get_json, lens_id, quality=quality)
+
+        return resolve
+
     def _attach_comments(self, item: ArchiveItem) -> None:
         """Fetch and attach comments for ``item`` per config (best-effort)."""
         if not self.config.archive.comments:
@@ -155,7 +167,9 @@ class ZhihuSource(Source):
         data = P.extract_initial_data(html)
         if data:
             try:
-                item = P.parse_article(data, article_id or "")
+                item = P.parse_article(
+                    data, article_id or "", video_resolver=self._video_resolver()
+                )
                 log.debug(
                     "parsed article %s from js-initialData: %r (%d chars, "
                     "%d images, title_image=%s)",
@@ -178,7 +192,10 @@ class ZhihuSource(Source):
         data = P.extract_initial_data(html)
         if not data:
             raise SourceError(f"no embedded data for answer at {url}")
-        item = P.parse_answer(data, answer_id or "", question_id)
+        item = P.parse_answer(
+            data, answer_id or "", question_id,
+            video_resolver=self._video_resolver(),
+        )
         log.debug(
             "parsed answer %s by %s (%d chars)",
             item.source_id,
@@ -192,7 +209,9 @@ class ZhihuSource(Source):
         data = P.extract_initial_data(html)
         if not data:
             raise SourceError(f"no embedded data for pin at {url}")
-        item = P.parse_pin(data, pin_id or "")
+        item = P.parse_pin(
+            data, pin_id or "", video_resolver=self._video_resolver()
+        )
         log.debug(
             "parsed pin %s by %s (%d chars, %d images)",
             item.source_id,

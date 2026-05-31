@@ -23,6 +23,7 @@ Values are resolved in this order, later winning:
 | `ZARCHIVER_DB` | `archive.db_path` | Archive database path. |
 | `ZARCHIVER_ASSETS_ROOT` | `archive.assets_root` | Downloaded-image store root. |
 | `ZARCHIVER_AUTO_EXPORT` | `archive.auto_export` | Comma-separated exporters to auto-run (e.g. `obsidian,html`). |
+| `ZARCHIVER_VIDEO_QUALITY` | `archive.video_quality` | Preferred video quality (`FHD`/`HD`/`SD`/`LD`). |
 | `ZARCHIVER_HEADLESS` | `browser.headless` | `1`/`true` forces headless. |
 
 ## Sections
@@ -41,6 +42,8 @@ it (see [usage](usage.md)).
 | `on_duplicate` | `skip` | `skip`, `update`, or `ask`. Matched by content hash in the DB. |
 | `comments` | `true` | Record comments (root + replies). Disable per run with `--no-comments`. |
 | `max_comments` | `100` | Max comments per item *including* child replies (0 = all). Override per run with `--max-comments`. |
+| `download_videos` | `true` | Download embedded videos as MP4 (play offline). Off → poster + link. Disable per run with `--no-videos`. |
+| `video_quality` | `FHD` | Preferred quality (`FHD`/`HD`/`SD`/`LD`); falls back to nearest. Override per run with `--video-quality`. |
 
 ### `[browser]`
 

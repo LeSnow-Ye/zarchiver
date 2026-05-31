@@ -143,3 +143,17 @@ def test_ingest_failed_image_omitted_from_map(tmp_path, store):
     ing = Ingestor(store, assets_root=tmp_path / "a", fetch=lambda u: None)
     ing.ingest(item)
     assert item.asset_map == {}
+
+
+def test_ingest_downloads_video_and_poster(tmp_path, store):
+    item = _item()
+    item.content_html = (
+        '<video src="https://v/clip.mp4" poster="https://x/cover.jpg"></video>'
+    )
+    ing = Ingestor(store, assets_root=tmp_path / "a", fetch=lambda u: PNG)
+    ing.ingest(item)
+    assert "https://v/clip.mp4" in item.asset_map
+    assert "https://x/cover.jpg" in item.asset_map
+    # The mp4 lands under the per-key dir.
+    rel = item.asset_map["https://v/clip.mp4"]
+    assert (tmp_path / "a" / rel).is_file()

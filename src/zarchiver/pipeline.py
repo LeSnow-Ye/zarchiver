@@ -218,7 +218,8 @@ def make_image_fetcher(config: Config) -> Callable[[str], Optional[bytes]]:
             "User-Agent": config.browser.user_agent,
             "Referer": "https://www.zhihu.com/",
         },
-        timeout=30.0,
+        # Generous: a single asset may be a multi-tens-of-MB FHD video.
+        timeout=httpx.Timeout(120.0, connect=30.0),
         follow_redirects=True,
     )
 
