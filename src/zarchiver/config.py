@@ -59,6 +59,11 @@ class AIConfig:
     max_input_chars: int = 12000
     timeout_s: int = 120
     language: str = "zh"  # language to summarize/tag in
+    # Optional reference taxonomy for the `category` field. When non-empty, the
+    # model is asked to prefer the closest match from this list; when empty, it
+    # free-generates a category. Build one from your own archive via
+    # scripts/category_stats.py — see docs/categories.md.
+    category_reference: str = ""
 
 
 @dataclass

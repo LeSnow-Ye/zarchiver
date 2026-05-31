@@ -99,6 +99,51 @@ def test_summarize_fallback_on_non_json():
 
 
 # ---------------------------------------------------------------------- #
+# Category reference (optional, config-driven)
+# ---------------------------------------------------------------------- #
+def test_category_free_generation_when_reference_empty():
+    # Empty category_reference => free generation, no reference block injected.
+    for lang in ("zh", "en"):
+        s = Summarizer(
+            AIConfig(api_key="x", language=lang, category_reference=""),
+            FakeProvider("{}"),
+        )
+        _system, instruction = s._prompts("标题", "正文")
+        assert "参考分类列表" not in instruction
+        assert "Reference categories" not in instruction
+
+
+def test_category_reference_injected_when_set():
+    ref = "- 计算机图形学\n- 游戏开发"
+    s = Summarizer(
+        AIConfig(api_key="x", language="zh", category_reference=ref),
+        FakeProvider("{}"),
+    )
+    _system, instruction = s._prompts("标题", "正文")
+    assert "参考分类列表" in instruction
+    assert "计算机图形学" in instruction and "游戏开发" in instruction
+    assert "优先" in instruction  # prefer-from-list wording
+
+
+def test_category_reference_whitespace_only_is_free_generation():
+    s = Summarizer(
+        AIConfig(api_key="x", category_reference="   \n  "), FakeProvider("{}")
+    )
+    _system, instruction = s._prompts("标题", "正文")
+    assert "参考分类列表" not in instruction
+
+
+def test_category_reference_with_braces_is_safe():
+    # A reference containing { } must not break str.format.
+    s = Summarizer(
+        AIConfig(api_key="x", category_reference="- a{b}c\n- 数学"),
+        FakeProvider("{}"),
+    )
+    _system, instruction = s._prompts("t", "b")
+    assert "a{b}c" in instruction
+
+
+# ---------------------------------------------------------------------- #
 # Live test (requires DEEPSEEK_API_KEY). Run with: pytest -m live
 # ---------------------------------------------------------------------- #
 @pytest.mark.live

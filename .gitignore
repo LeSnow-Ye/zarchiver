@@ -26,6 +26,9 @@ output/
 *.sqlite3
 *.db
 zarchiver.db
+# Per-archive category frequency dump (personal data; regenerate with
+# scripts/category_stats.py). The guide docs/categories.md is committed.
+category_stats.md
 
 # Playwright / MCP scratch
 .playwright-mcp/

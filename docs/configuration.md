@@ -101,6 +101,7 @@ it (see [usage](usage.md)).
 | `max_input_chars` | `12000` | Body is truncated to this before sending. Set to 0 to disable truncation |
 | `timeout_s` | `120` | Request timeout. |
 | `language` | `zh` | `zh` or `en` for the summary/tags. |
+| `category_reference` | `""` | Optional reference taxonomy for `category`. Empty → the AI free-generates a category; non-empty → it prefers the closest match (curbs sprawl). Build one for your corpus with `scripts/category_stats.py` — see [categories.md](categories.md). |
 
 ## Authentication options
 

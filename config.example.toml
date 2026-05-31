@@ -118,3 +118,19 @@ max_input_chars = 20000
 timeout_s = 120
 # Language for summaries/tags: "zh" or "en".
 language = "zh"
+# Optional reference taxonomy for the `category` field:
+#   - Empty (default): the AI free-generates a category each time. Use this for
+#     the first pass over a fresh archive.
+#   - Non-empty: the AI prefers the closest match from your list, which keeps
+#     categories from fragmenting into many near-duplicate labels.
+# Categories are corpus-specific, so build your OWN list (see docs/categories.md):
+#   1. archive a batch with this left empty (free generation),
+#   2. uv run python scripts/category_stats.py -o category_stats.md
+#   3. paste that output into an AI with the prompt in docs/categories.md,
+#   4. drop the result here as a TOML multi-line string, e.g.:
+#        category_reference = """
+#        - 计算机图形学与渲染
+#        - 游戏开发
+#        - 数学
+#        """
+category_reference = ""
