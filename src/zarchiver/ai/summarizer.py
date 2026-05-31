@@ -36,22 +36,17 @@ _SYSTEM_EN = (
     "category. Return only a JSON object, with no extra text or code fences."
 )
 
-# Tag rules mirror Obsidian's (https://obsidian.md/help/tags) so the tags can be
-# used directly as note tags: letters/numbers/_/-, '/' for nesting, no spaces,
-# at least one non-numeric char, case-insensitive.
-_TAG_RULES_ZH = """标签必须符合 Obsidian 标签规范，便于直接用作笔记标签：
-- 用斜杠(/)表示层级标签(如 编程/cpp)。
-- 不能包含空格、括号等字符。
+# See https://obsidian.md/help/tags
+_TAG_RULES_ZH = """标签必须满足如下规范：
+- 不能包含空格、括号等字符（如 `#` `.`），如有必要，可以使用`-`或`_`连接词语。
 - 不能是纯数字(如 "2024" 不合法，"y2024" 合法)，至少含一个非数字字符。
-- 标签不带前导的 # 号。
+- 英文标签优先使用 PascalCase（如 Cpp、UE5、ComputeShader 等）
 - 优先使用通用、可复用的主题词，避免过于具体或一次性的标签。"""
 
-_TAG_RULES_EN = """Tags must follow Obsidian's tag rules so they work as note tags:
-- Only letters, numbers, underscore (_), hyphen (-); use a forward slash (/) for nested tags (e.g. programming/cpp).
-- No spaces; join words with kebab-case (e.g. machine-learning), not spaces or punctuation.
+_TAG_RULES_EN = """Tags must follow these rules:
+- Only letters, numbers, underscore (_), hyphen (-), no hash (#) or dot (.) or brackets.
+- No spaces; join words with PascalCase (e.g. ComputeShader, Cpp, UE5), not spaces or punctuation.
 - Not purely numeric ("2024" is invalid, "y2024" is valid); include at least one non-numeric character.
-- Do not include a leading # in the tag.
-- Use lowercase (tags are case-insensitive).
 - Prefer general, reusable topic words; avoid overly specific or one-off tags."""
 
 _INSTRUCTION_ZH = """请基于以下内容生成一个 JSON 对象，格式严格为：
