@@ -91,7 +91,7 @@ def test_ingest_collects_title_and_comment_images(tmp_path, store):
 
 def test_ingest_runs_summarizer(tmp_path, store):
     class FakeSummarizer:
-        def summarize(self, item):
+        def summarize_with_retry(self, item):
             return AIResult(summary="s", tags=["t"], category="c", model="m")
 
     item = _item()
@@ -108,7 +108,7 @@ def test_ingest_runs_summarizer(tmp_path, store):
 
 def test_ingest_ai_failure_non_fatal(tmp_path, store):
     class BoomSummarizer:
-        def summarize(self, item):
+        def summarize_with_retry(self, item):
             raise RuntimeError("api down")
 
     item = _item()

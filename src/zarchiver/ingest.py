@@ -75,7 +75,7 @@ class Ingestor:
 
         if self.summarizer is not None:
             try:
-                item.ai = self.summarizer.summarize(item)
+                item.ai = self.summarizer.summarize_with_retry(item)
             except Exception as exc:  # AI must never block archiving
                 log.warning("AI summarization failed for %r: %s", item.title, exc)
 

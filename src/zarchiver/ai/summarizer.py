@@ -19,7 +19,7 @@ import json
 import logging
 import re
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from bs4 import BeautifulSoup
 
@@ -41,7 +41,7 @@ _SYSTEM_EN = (
 )
 
 # See https://obsidian.md/help/tags
-_TAG_RULES_ZH = """标签必须满足如下规范：
+_TAG_RULES_ZH = """标签必须满足如下 Obsidian 规范：
 - 不能包含空格、括号等字符（如 `#` `.`），如有必要，可以使用`-`或`_`连接词语。
 - 不能是纯数字(如 "2024" 不合法，"y2024" 合法)，至少含一个非数字字符。
 - 英文标签优先使用 PascalCase（如 Cpp、UE5、ComputeShader 等）
@@ -102,6 +102,36 @@ Body:
 """
 
 
+def retry_ai_summary(
+    summarize: Callable[[], AIResult],
+    *,
+    title: str = "",
+    max_retries: int = 2,
+    sleep: Callable[[float], None] = time.sleep,
+) -> AIResult:
+    """Run an AI summary call with exponential backoff retries.
+
+    ``max_retries`` counts retries after the first attempt. The final exception
+    is re-raised so callers can decide whether AI failure should abort their
+    workflow.
+    """
+    retries = max(0, int(max_retries))
+    attempts = 1 + retries
+    for attempt in range(attempts):
+        try:
+            return summarize()
+        except Exception as exc:
+            if attempt >= retries:
+                raise
+            delay = min(0.5 * (2 ** attempt), 8.0)
+            log.debug(
+                "AI summarization failed (%s), retrying in %.1fs: %r",
+                exc, delay, title,
+            )
+            sleep(delay)
+    raise RuntimeError("unreachable AI retry state")
+
+
 class Summarizer:
     def __init__(
         self,
@@ -143,6 +173,22 @@ class Summarizer:
         if self.store is not None and not result.is_empty():
             self.store.put_ai(chash, result)
         return result
+
+    def summarize_with_retry(
+        self,
+        item: ArchiveItem,
+        *,
+        use_cache: bool = True,
+        max_retries: int = 2,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> AIResult:
+        """Return an AI summary, retrying transient provider failures."""
+        return retry_ai_summary(
+            lambda: self.summarize(item, use_cache=use_cache),
+            title=item.title,
+            max_retries=max_retries,
+            sleep=sleep,
+        )
 
     # ------------------------------------------------------------------ #
     def _prepare_body(self, html: str) -> str:

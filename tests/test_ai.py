@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from zarchiver.ai.base import LLMProvider
+from zarchiver.ai.base import LLMError, LLMProvider
 from zarchiver.ai.summarizer import Summarizer, _extract_json
 from zarchiver.config import AIConfig
 from zarchiver.models import ArchiveItem, ContentType
@@ -23,6 +23,20 @@ class FakeProvider(LLMProvider):
         self.calls += 1
         self.last_json_mode = json_mode
         return self.reply
+
+
+class FlakyProvider(LLMProvider):
+    name = "flaky"
+
+    def __init__(self, failures: int):
+        self.failures = failures
+        self.calls = 0
+
+    def complete(self, system, user, *, json_mode=False):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise LLMError("temporary AI failure")
+        return '{"summary":"s","tags":["a"],"category":"c"}'
 
 
 def _item():
@@ -96,6 +110,32 @@ def test_summarize_fallback_on_non_json():
     s = Summarizer(AIConfig(api_key="x"), p)
     r = s.summarize(_item(), use_cache=False)
     assert "没有 JSON" in r.summary
+
+
+def test_summarize_with_retry_recovers():
+    p = FlakyProvider(failures=2)
+    s = Summarizer(AIConfig(api_key="x"), p)
+    r = s.summarize_with_retry(
+        _item(),
+        use_cache=False,
+        max_retries=2,
+        sleep=lambda _: None,
+    )
+    assert r.summary == "s"
+    assert p.calls == 3
+
+
+def test_summarize_with_retry_exhausts():
+    p = FlakyProvider(failures=3)
+    s = Summarizer(AIConfig(api_key="x"), p)
+    with pytest.raises(LLMError):
+        s.summarize_with_retry(
+            _item(),
+            use_cache=False,
+            max_retries=2,
+            sleep=lambda _: None,
+        )
+    assert p.calls == 3
 
 
 # ---------------------------------------------------------------------- #
