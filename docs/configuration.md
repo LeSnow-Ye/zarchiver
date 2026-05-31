@@ -24,6 +24,7 @@ Values are resolved in this order, later winning:
 | `ZARCHIVER_ASSETS_ROOT` | `archive.assets_root` | Downloaded-image store root. |
 | `ZARCHIVER_AUTO_EXPORT` | `archive.auto_export` | Comma-separated exporters to auto-run (e.g. `obsidian,html`). |
 | `ZARCHIVER_VIDEO_QUALITY` | `archive.video_quality` | Preferred video quality (`FHD`/`HD`/`SD`/`LD`). |
+| `ZARCHIVER_MAX_ASSET_MB` | `archive.max_asset_mb` | Max size (MB) per downloaded asset; `0` disables the limit. |
 | `ZARCHIVER_PREFER_API_CONTENT` | `archive.prefer_api_content` | `1`/`true`/`0`/`false`; build batch items from the API instead of opening pages. |
 | `ZARCHIVER_HEADLESS` | `browser.headless` | `1`/`true` forces headless. |
 
@@ -45,6 +46,7 @@ it (see [usage](usage.md)).
 | `max_comments` | `100` | Max comments per item *including* child replies (0 = all). Override per run with `--max-comments`. |
 | `download_videos` | `true` | Download embedded videos as MP4 (play offline). Off → poster + link. Disable per run with `--no-videos`. |
 | `video_quality` | `FHD` | Preferred quality (`FHD`/`HD`/`SD`/`LD`); falls back to nearest. Override per run with `--video-quality`. |
+| `max_asset_mb` | `20.0` | Max size (MB) for a single downloaded asset (image/video). Larger assets aren't stored locally; the content keeps the original remote link. `0` disables the limit. |
 | `prefer_api_content` | `true` | In batch archives, build items from the listing API's JSON (full body included) instead of opening each page — faster, and dedup happens up front. Pages are still opened as a fallback when an API entry lacks content. Set `false` to force opening every page. |
 
 ### `[browser]`

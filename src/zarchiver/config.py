@@ -111,6 +111,10 @@ class ArchiveConfig:
     download_videos: bool = True
     # Preferred video quality when downloading: FHD | HD | SD | LD.
     video_quality: str = "FHD"
+    # Maximum size (in MB) for a single downloaded asset (image/video). Assets
+    # larger than this are not stored locally; the content keeps the original
+    # remote link instead. 0 disables the limit (archive everything).
+    max_asset_mb: float = 20.0
     # In batch archives, build items directly from the listing API's JSON
     # (which carries the full content body) instead of opening each item's
     # page. Pages are still opened as a fallback when the API entry lacks
@@ -162,6 +166,11 @@ class Config:
             ]
         if v := env.get("ZARCHIVER_VIDEO_QUALITY"):
             self.archive.video_quality = v.strip().upper()
+        if v := env.get("ZARCHIVER_MAX_ASSET_MB"):
+            try:
+                self.archive.max_asset_mb = max(0.0, float(v.strip()))
+            except ValueError:
+                pass  # ignore a malformed override, keep the configured value
         if (v := env.get("ZARCHIVER_PREFER_API_CONTENT")) is not None:
             self.archive.prefer_api_content = v.strip().lower() in (
                 "1", "true", "yes"

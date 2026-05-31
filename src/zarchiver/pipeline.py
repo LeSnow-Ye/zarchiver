@@ -219,7 +219,11 @@ def make_image_fetcher(config: Config) -> Callable[[str], Optional[bytes]]:
     """Build an image fetcher that satisfies Zhihu's hotlink/referer checks.
 
     Returns a function ``url -> bytes | None`` backed by a persistent
-    httpx.Client with a Zhihu referer and browser-like UA.
+    httpx.Client with a Zhihu referer and browser-like UA. Assets larger than
+    ``archive.max_asset_mb`` are refused (returns None) so the content keeps its
+    original remote link instead of storing an oversized file; the limit is
+    enforced both via the ``Content-Length`` header and while streaming (in case
+    the header is absent or lies). ``max_asset_mb = 0`` disables the limit.
     """
     client = httpx.Client(
         headers={
@@ -230,14 +234,38 @@ def make_image_fetcher(config: Config) -> Callable[[str], Optional[bytes]]:
         timeout=httpx.Timeout(120.0, connect=30.0),
         follow_redirects=True,
     )
+    max_bytes = int(config.archive.max_asset_mb * 1024 * 1024)
 
     def fetch(url: str) -> Optional[bytes]:
         try:
-            resp = client.get(url)
-            if resp.status_code == 200 and resp.content:
-                return resp.content
+            with client.stream("GET", url) as resp:
+                if resp.status_code != 200:
+                    return None
+                # Trust an advertised size to skip the download entirely.
+                if max_bytes:
+                    declared = resp.headers.get("content-length")
+                    if declared and declared.isdigit() and int(declared) > max_bytes:
+                        log.info(
+                            "skipping asset over %.0f MB (%.1f MB): %s",
+                            config.archive.max_asset_mb,
+                            int(declared) / 1024 / 1024, url,
+                        )
+                        return None
+                chunks: list[bytes] = []
+                size = 0
+                for chunk in resp.iter_bytes():
+                    size += len(chunk)
+                    # Guard against a missing/incorrect Content-Length.
+                    if max_bytes and size > max_bytes:
+                        log.info(
+                            "skipping asset exceeding %.0f MB while streaming: %s",
+                            config.archive.max_asset_mb, url,
+                        )
+                        return None
+                    chunks.append(chunk)
+                data = b"".join(chunks)
+                return data or None
         except httpx.HTTPError:
             return None
-        return None
 
     return fetch

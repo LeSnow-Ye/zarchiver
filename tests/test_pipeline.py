@@ -244,3 +244,83 @@ def test_export_items_overwrites_by_default(tmp_path, store):
     outcomes = export_items([item], [exp])  # no skip_existing → re-export
     assert outcomes[0].action == Action.EXPORTED
     assert len(exp.exported) == 2
+
+
+# ---------------------------------------------------------------------- #
+# Image fetcher: max-asset-size enforcement
+# ---------------------------------------------------------------------- #
+def _fetcher_with_responses(monkeypatch, cfg, handler):
+    """Build make_image_fetcher's fetch() backed by an httpx MockTransport."""
+    import httpx
+
+    from zarchiver import pipeline as P
+
+    real_client = httpx.Client
+
+    def fake_client(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(P.httpx, "Client", fake_client)
+    return P.make_image_fetcher(cfg)
+
+
+def test_fetcher_downloads_under_limit(monkeypatch):
+    import httpx
+
+    cfg = Config()
+    cfg.archive.max_asset_mb = 1.0  # 1 MB
+    body = b"x" * 500_000  # 0.5 MB
+
+    def handler(request):
+        return httpx.Response(200, content=body)
+
+    fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
+    assert fetch("https://pic.zhimg.com/a.jpg") == body
+
+
+def test_fetcher_rejects_via_content_length(monkeypatch):
+    import httpx
+
+    cfg = Config()
+    cfg.archive.max_asset_mb = 1.0
+    big = b"y" * (2 * 1024 * 1024)  # 2 MB
+
+    def handler(request):
+        # Content-Length is set automatically from content.
+        return httpx.Response(200, content=big)
+
+    fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
+    assert fetch("https://vzuu.com/big.mp4") is None  # over the 1 MB cap
+
+
+def test_fetcher_rejects_while_streaming_without_content_length(monkeypatch):
+    import httpx
+
+    cfg = Config()
+    cfg.archive.max_asset_mb = 1.0
+
+    def gen():
+        for _ in range(3):
+            yield b"z" * (512 * 1024)  # 1.5 MB total, streamed in chunks
+
+    def handler(request):
+        # A streaming response with no Content-Length header.
+        return httpx.Response(200, content=gen())
+
+    fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
+    assert fetch("https://vzuu.com/chunked.mp4") is None
+
+
+def test_fetcher_zero_limit_disables_cap(monkeypatch):
+    import httpx
+
+    cfg = Config()
+    cfg.archive.max_asset_mb = 0  # disabled → archive everything
+    big = b"y" * (5 * 1024 * 1024)
+
+    def handler(request):
+        return httpx.Response(200, content=big)
+
+    fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
+    assert fetch("https://vzuu.com/huge.mp4") == big
