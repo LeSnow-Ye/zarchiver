@@ -88,4 +88,4 @@ Tests run offline against trimmed HTML fixtures in `tests/fixtures/`; the
 
 ## License
 
-TBD.
+[GPL-3.0](LICENSE)
