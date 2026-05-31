@@ -110,25 +110,45 @@ Zhihu encodes animated/video media three ways in the raw `content`, handled in
 
 ## Batch pages: APIs vs. scroll
 
-**Columns (专栏) and collections (收藏夹) use JSON list APIs** — far more
-reliable and faster than scraping the rendered page:
+**Columns (专栏), collections (收藏夹), and questions (问题) all use JSON list
+APIs** — far more reliable and faster than scraping the rendered page:
 
 - column items — `/api/v4/columns/{id}/items?limit=N&ws_qiangzhisafe=0&offset=M`
 - collection items — `/api/v4/collections/{id}/items?offset=M&limit=N`
+- question answers — `/api/v4/questions/{id}/answers?include=data[*].content,voteup_count,comment_count,updated_time,created_time,author&limit=N&offset=M`
 
 zarchiver pages through them (`offset`/`limit`) following `paging.next` until
 `paging.is_end`, the configured cap is reached, or a request fails. Each entry
-carries the item's canonical `url` and `type`; column items expose these at the
-top level, while collection items wrap them under a `content` object. Only
-archivable types (article / answer / pin) are kept — videos, ads, and deleted
-items are skipped — and the URLs are deduped before each one is fetched and
-parsed normally. Titles come from the matching metadata endpoint
+carries the item's `type` *and its full `content` body* — column items expose
+these at the top level, while collection items wrap them under a `content`
+object. Only archivable types (article / answer / pin) are kept; videos, ads,
+and deleted items are skipped. Titles come from the matching metadata endpoint
 (`/api/v4/collections/{id}` → `collection.title`, `/api/v4/columns/{id}` →
-`title`). All of this goes through the browser context (`context.request`), so
-session cookies and the referer apply; transient edge 403s are retried.
+`title`) or, for questions, from each answer's embedded `question.title`. All of
+this goes through the browser context (`context.request`), so session cookies
+and the referer apply; transient edge 403s are retried.
 
-**Questions still lazy-load on scroll**: their answer cards don't always expose
-a clean `<a href>`, so zarchiver harvests candidate item URLs while scrolling
+**Trust the API body, fall back to the page.** Because the list API already
+returns the complete content, zarchiver builds each `ArchiveItem` directly from
+that JSON (`item_from_api_entry`) — no per-item page navigation. This was
+verified to produce a *byte-identical* `content_hash` to opening the page, so
+duplicate detection works entirely on API data and unchanged items cost nothing.
+If an entry ever lacks usable content (empty body or an unexpected shape), that
+one item falls back to fetching its page. Set `archive.prefer_api_content =
+false` to force the old open-every-page behavior.
+
+One nuance: the question answers API and the rendered page can serve the same
+inline image from different CDN mirrors (`pic1` vs `picx` in a lazy
+`data-actualsrc`). Same image, but the two paths hash differently — so an answer
+archived once via the question API and again via its own page reads as
+"changed". This is a re-ingest, not a correctness problem.
+
+Question answer URLs from the API come back as `/api/v4/answers/{id}` (no
+question id), so `web_url_from_api_entry` rebuilds the canonical
+`/question/{qid}/answer/{aid}` form (used for both dedup and any page fallback).
+
+**Scroll is the questions fallback.** If the answers API yields nothing,
+zarchiver still harvests candidate answer URLs while scrolling the rendered page
 from three signals:
 
 1. plain `<a href>` anchors,

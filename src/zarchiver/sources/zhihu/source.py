@@ -307,10 +307,16 @@ class ZhihuSource(Source):
 
     # Page size for the items APIs (columns/collections).
     _API_PAGE_LIMIT = 20
+    # Fields requested from the question answers API so each entry carries the
+    # full body (and metadata) — lets us archive without opening each page.
+    _ANSWER_API_INCLUDE = (
+        "data[*].content,voteup_count,comment_count,"
+        "updated_time,created_time,author"
+    )
 
     def _fetch_collection(self, target: ZhihuTarget) -> Iterator[ArchiveItem]:
         cid = target.collection_id
-        links = self._collect_api_item_urls(
+        entries = self._walk_api_pages(
             f"https://www.zhihu.com/api/v4/collections/{cid}/items"
             f"?offset=0&limit={self._API_PAGE_LIMIT}",
             label="collection",
@@ -321,11 +327,11 @@ class ZhihuSource(Source):
         batch = self._make_batch(
             BatchKind.COLLECTION, title, cid, target.raw_url
         )
-        yield from self._iter_item_links(links, batch)
+        yield from self._iter_api_or_fetch(entries, batch)
 
     def _fetch_column(self, target: ZhihuTarget) -> Iterator[ArchiveItem]:
         cid = target.column_id
-        links = self._collect_api_item_urls(
+        entries = self._walk_api_pages(
             f"https://www.zhihu.com/api/v4/columns/{cid}/items"
             f"?limit={self._API_PAGE_LIMIT}&ws_qiangzhisafe=0&offset=0",
             label="column",
@@ -334,49 +340,125 @@ class ZhihuSource(Source):
             self._get_json(f"https://www.zhihu.com/api/v4/columns/{cid}")
         )
         batch = self._make_batch(BatchKind.COLUMN, title, cid, target.raw_url)
-        yield from self._iter_item_links(links, batch)
+        yield from self._iter_api_or_fetch(entries, batch)
 
-    def _collect_api_item_urls(self, first_url: str, *, label: str) -> list[str]:
-        """Page through a column/collection ``/items`` API, collecting URLs.
+    def _walk_api_pages(self, first_url: str, *, label: str) -> list[dict]:
+        """Page through an items/answers API, collecting archivable entries.
 
         Walks ``offset``-paginated pages via ``paging.next`` until the API
         reports the end, the configured ``max_items`` cap is reached, or a
-        request fails. Item URLs are deduped while preserving order.
+        request fails. Entries are the raw API objects (carrying the full
+        ``content`` body), deduped by canonical URL while preserving order.
         """
         cap = self._max_items()
-        urls: list[str] = []
+        entries: list[dict] = []
         seen: set[str] = set()
         url: Optional[str] = first_url
         page = 0
         while url is not None:
-            if cap and len(urls) >= cap:
+            if cap and len(entries) >= cap:
                 break
             payload = self._get_json(url)
             if not payload:
-                log.warning("%s items request failed; stopping at %d", label, len(urls))
+                log.warning(
+                    "%s items request failed; stopping at %d", label, len(entries)
+                )
                 break
             page += 1
             new = 0
-            for u in P.item_urls_from_api(payload):
-                if u in seen:
+            for obj in P.archivable_entries_from_api(payload):
+                key = P.web_url_from_api_entry(obj)
+                if key in seen:
                     continue
-                seen.add(u)
-                urls.append(u)
+                seen.add(key)
+                entries.append(obj)
                 new += 1
-                if cap and len(urls) >= cap:
+                if cap and len(entries) >= cap:
                     break
             log.info(
-                "%s page %d: +%d item(s) (%d total)", label, page, new, len(urls)
+                "%s page %d: +%d item(s) (%d total)", label, page, new, len(entries)
             )
             url = P.api_paging_next(payload)
         if cap:
-            urls = urls[:cap]
-        log.info("collected %d %s item(s) across %d page(s)", len(urls), label, page)
-        return urls
+            entries = entries[:cap]
+        log.info(
+            "collected %d %s item(s) across %d page(s)", len(entries), label, page
+        )
+        return entries
+
+    def _collect_api_item_urls(self, first_url: str, *, label: str) -> list[str]:
+        """Canonical item URLs from a column/collection ``/items`` API.
+
+        Thin wrapper over :meth:`_walk_api_pages` (kept for callers that only
+        need URLs, e.g. when ``prefer_api_content`` is off).
+        """
+        return [
+            P._canonical_item_url(obj["url"])
+            for obj in self._walk_api_pages(first_url, label=label)
+        ]
+
+    def _iter_api_or_fetch(
+        self, entries: list[dict], batch: Optional[BatchInfo]
+    ) -> Iterator[ArchiveItem]:
+        """Yield items from API entries, opening the page only when needed.
+
+        When ``prefer_api_content`` is on, each entry is built directly from its
+        API JSON (full body included) — no page navigation. If that yields no
+        usable content (empty body or unexpected shape), or the preference is
+        off, the item's page is fetched as a fallback. Comments are attached for
+        API-built items (the page path already attaches them in ``fetch``).
+        """
+        cap = self._max_items()
+        prefer_api = self.config.archive.prefer_api_content
+        total = min(len(entries), cap) if cap else len(entries)
+        resolver = self._video_resolver()
+        count = 0
+        for obj in entries:
+            if cap and count >= cap:
+                return
+            url = P.web_url_from_api_entry(obj)
+            item: Optional[ArchiveItem] = None
+            if prefer_api:
+                item = P.item_from_api_entry(obj, video_resolver=resolver)
+            if item is not None:
+                log.info(
+                    "item %d/%d from API: %s", count + 1, total, url
+                )
+                self._attach_comments(item)
+            else:
+                log.info(
+                    "fetching item %d/%d (page): %s", count + 1, total, url
+                )
+                try:
+                    item = self.fetch(url)
+                except SourceError as exc:
+                    log.warning("skipping %s: %s", url, exc)
+                    continue
+            item.batch = batch
+            count += 1
+            yield item
+            self.browser.polite_delay()
 
     def _fetch_question_answers(self, target: ZhihuTarget) -> Iterator[ArchiveItem]:
+        qid = target.question_id
+        if self.config.archive.prefer_api_content:
+            entries = self._walk_api_pages(
+                f"https://www.zhihu.com/api/v4/questions/{qid}/answers"
+                f"?include={self._ANSWER_API_INCLUDE}"
+                f"&limit={self._API_PAGE_LIMIT}&offset=0",
+                label="question",
+            )
+            if entries:
+                title = P.question_title_from_answers({"data": entries})
+                batch = self._make_batch(
+                    BatchKind.QUESTION, title, qid, target.raw_url
+                )
+                yield from self._iter_api_or_fetch(entries, batch)
+                return
+            log.info("question answers API returned nothing; falling back to scroll")
+        # Fallback: scroll the rendered page for answer links, fetch each page.
         links, data = self._scroll_collect_links(
-            target.raw_url, rf"/question/{target.question_id}/answer/\d+"
+            target.raw_url, rf"/question/{qid}/answer/\d+"
         )
         batch = self._make_batch_from_data(
             BatchKind.QUESTION, data, target.question_id, target.raw_url

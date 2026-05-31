@@ -12,6 +12,7 @@
 #   ZARCHIVER_ASSETS_ROOT -> archive.assets_root
 #   ZARCHIVER_AUTO_EXPORT -> archive.auto_export (comma-separated, e.g. "obsidian,html")
 #   ZARCHIVER_VIDEO_QUALITY -> archive.video_quality (FHD|HD|SD|LD)
+#   ZARCHIVER_PREFER_API_CONTENT -> archive.prefer_api_content ("1"/"true"/"0"/"false")
 #   ZARCHIVER_HEADLESS    -> browser.headless ("1"/"true" to force headless)
 
 [archive]
@@ -38,6 +39,12 @@ download_videos = true
 # Preferred video quality when downloading: FHD | HD | SD | LD. Falls back to
 # the nearest available. FHD can be tens of MB per video.
 video_quality = "FHD"
+# In batch archives (collection/column/question), build each item directly from
+# the listing API's JSON (which already contains the full body) instead of
+# opening its page — much faster, and lets duplicate detection happen up front.
+# Pages are still opened as a fallback when an API entry lacks usable content.
+# Set false to force the old "open every page" behavior.
+prefer_api_content = true
 
 [browser]
 # Zhihu blocks headless chrome-headless-shell. Keep this false (headful).

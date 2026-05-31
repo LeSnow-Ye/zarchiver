@@ -611,18 +611,20 @@ def batch_title(data: Optional[dict], kind: str, batch_id: Optional[str]) -> Opt
 # ---------------------------------------------------------------------- #
 # Items / metadata APIs (columns + collections)
 # ---------------------------------------------------------------------- #
-def item_urls_from_api(payload: Optional[dict]) -> list[str]:
-    """Extract item URLs from a column/collection ``/items`` API page.
+def archivable_entries_from_api(payload: Optional[dict]) -> list[dict]:
+    """Yield the archivable content objects from an items/answers API page.
 
-    Two shapes are handled: column items expose ``url`` (and ``type``) at the
-    top level of each ``data`` entry; collection items wrap the real object in a
-    ``content`` field (``data[].content.url``). Only archivable item types
-    (article / answer / pin) are kept; anything else (videos, ads, deleted) is
-    skipped.
+    Two shapes are handled: column items expose the object at the top level of
+    each ``data`` entry; collection items wrap it in a ``content`` field
+    (``data[].content``). Only archivable item types (article / answer / pin)
+    that aren't deleted and carry a ``url`` are kept; anything else (videos,
+    ads, deleted) is skipped. The returned dicts are the raw API objects — feed
+    them to :func:`item_from_api_entry` to build items, or read ``url`` for the
+    page-based path.
     """
     if not isinstance(payload, dict):
         return []
-    urls: list[str] = []
+    out: list[dict] = []
     for entry in payload.get("data", []) or []:
         if not isinstance(entry, dict):
             continue
@@ -631,10 +633,168 @@ def item_urls_from_api(payload: Optional[dict]) -> list[str]:
             continue
         if obj.get("type") not in ("article", "answer", "pin"):
             continue
-        url = obj.get("url")
-        if isinstance(url, str) and url:
-            urls.append(_canonical_item_url(url))
-    return urls
+        if not isinstance(obj.get("url"), str) or not obj.get("url"):
+            continue
+        out.append(obj)
+    return out
+
+
+def item_urls_from_api(payload: Optional[dict]) -> list[str]:
+    """Extract item URLs from a column/collection ``/items`` API page.
+
+    Thin wrapper over :func:`archivable_entries_from_api`: returns just the
+    canonical web URLs (the form :func:`classify` recognizes).
+    """
+    return [
+        _canonical_item_url(obj["url"])
+        for obj in archivable_entries_from_api(payload)
+    ]
+
+
+def _g(obj: dict, *keys, default=None):
+    """First present, non-None value among ``keys`` (snake_case then camel)."""
+    for k in keys:
+        v = obj.get(k)
+        if v is not None:
+            return v
+    return default
+
+
+def web_url_from_api_entry(obj: dict) -> str:
+    """Canonical web URL for an API entry (the form :func:`classify` accepts).
+
+    Answer entries from the question API expose only ``/api/v4/answers/<id>``
+    (no question id), so we rebuild ``/question/<qid>/answer/<aid>`` from the
+    embedded ``question`` when possible. Articles/pins use their own URL
+    builders; otherwise fall back to canonicalizing the entry's ``url``.
+    """
+    kind = obj.get("type")
+    oid = str(obj.get("id") or "")
+    if kind == "answer" and oid:
+        q = obj.get("question") if isinstance(obj.get("question"), dict) else {}
+        qid = str(q.get("id") or "")
+        if qid:
+            return zurls.answer_url(qid, oid)
+    if kind == "article" and oid:
+        return zurls.article_url(oid)
+    if kind == "pin" and oid:
+        return zurls.pin_url(oid)
+    return _canonical_item_url(obj.get("url") or "")
+
+
+def item_from_api_entry(
+    obj: dict, *, video_resolver: Optional["VideoResolver"] = None
+) -> Optional[ArchiveItem]:
+    """Build a full :class:`ArchiveItem` directly from a listing-API object.
+
+    The collection/column/answer APIs embed the complete ``content`` body, so a
+    batch item can be archived without opening its page. Dispatches on the
+    object's ``type``. Returns ``None`` when the entry lacks usable content (or
+    has an unexpected shape) so the caller can fall back to fetching the page.
+    Never raises: any parse surprise degrades to ``None``.
+    """
+    try:
+        kind = obj.get("type")
+        if kind == "answer":
+            return _answer_from_api(obj, video_resolver)
+        if kind == "article":
+            return _article_from_api(obj, video_resolver)
+        if kind == "pin":
+            return _pin_from_api(obj, video_resolver)
+    except Exception:
+        return None
+    return None
+
+
+def _answer_from_api(obj: dict, video_resolver) -> Optional[ArchiveItem]:
+    body = obj.get("content")
+    if not isinstance(body, str) or not body.strip():
+        return None
+    question = obj.get("question") if isinstance(obj.get("question"), dict) else {}
+    qid = str(question.get("id") or "")
+    aid = str(obj.get("id") or "")
+    q_title = question.get("title") or "(question)"
+    return ArchiveItem(
+        platform=PLATFORM,
+        content_type=ContentType.ANSWER,
+        source_id=aid,
+        url=zurls.answer_url(qid, aid) if qid else
+            f"https://www.zhihu.com/answer/{aid}",
+        title=q_title,
+        content_html=clean_content_html(body, video_resolver=video_resolver),
+        author=_make_author(obj.get("author")),
+        created=ArchiveItem.epoch_to_dt(_g(obj, "created_time", "createdTime", "created")),
+        updated=ArchiveItem.epoch_to_dt(_g(obj, "updated_time", "updatedTime", "updated")),
+        question_title=q_title,
+        question_url=zurls.question_url(qid) if qid else None,
+        voteup_count=_g(obj, "voteup_count", "voteupCount"),
+        comment_count=_g(obj, "comment_count", "commentCount"),
+        excerpt=obj.get("excerpt") or "",
+    )
+
+
+def _article_from_api(obj: dict, video_resolver) -> Optional[ArchiveItem]:
+    body = obj.get("content")
+    if not isinstance(body, str) or not body.strip():
+        return None
+    aid = str(obj.get("id") or "")
+    column = obj.get("column") if isinstance(obj.get("column"), dict) else {}
+    return ArchiveItem(
+        platform=PLATFORM,
+        content_type=ContentType.ARTICLE,
+        source_id=aid,
+        url=zurls.article_url(aid),
+        title=obj.get("title") or "(untitled)",
+        content_html=clean_content_html(body, video_resolver=video_resolver),
+        author=_make_author(obj.get("author")),
+        created=ArchiveItem.epoch_to_dt(_g(obj, "created", "created_time", "createdTime")),
+        updated=ArchiveItem.epoch_to_dt(_g(obj, "updated", "updated_time", "updatedTime")),
+        title_image=_clean_image_url(
+            _g(obj, "title_image", "titleImage", "image_url")
+        ),
+        column_title=column.get("title") or None,
+        column_url=column.get("url") or None,
+        voteup_count=_g(obj, "voteup_count", "voteupCount"),
+        comment_count=_g(obj, "comment_count", "commentCount"),
+        topics=_topics(obj),
+        excerpt=obj.get("excerpt") or "",
+    )
+
+
+def _pin_from_api(obj: dict, video_resolver) -> Optional[ArchiveItem]:
+    content_html = _pin_content_html(obj)
+    if not content_html or not content_html.strip():
+        return None
+    pid = str(obj.get("id") or "")
+    title = _pin_title(obj, content_html)
+    return ArchiveItem(
+        platform=PLATFORM,
+        content_type=ContentType.PIN,
+        source_id=pid,
+        url=zurls.pin_url(pid),
+        title=title,
+        content_html=clean_content_html(content_html, video_resolver=video_resolver),
+        author=_make_author(obj.get("author")),
+        created=ArchiveItem.epoch_to_dt(_g(obj, "created", "created_time", "createdTime")),
+        updated=ArchiveItem.epoch_to_dt(_g(obj, "updated", "updated_time", "updatedTime")),
+        voteup_count=_g(obj, "like_count", "likeCount", "voteup_count"),
+        comment_count=_g(obj, "comment_count", "commentCount"),
+        topics=_topics(obj),
+        excerpt=_strip_html(obj.get("excerpt_title") or obj.get("excerptTitle") or "")[:200],
+    )
+
+
+def question_title_from_answers(payload: Optional[dict]) -> Optional[str]:
+    """Resolve a question's title from a ``/questions/<id>/answers`` API page."""
+    if not isinstance(payload, dict):
+        return None
+    for entry in payload.get("data", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        q = entry.get("question")
+        if isinstance(q, dict) and isinstance(q.get("title"), str) and q["title"].strip():
+            return q["title"].strip()
+    return None
 
 
 def api_paging_next(payload: Optional[dict]) -> Optional[str]:

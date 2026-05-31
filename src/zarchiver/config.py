@@ -111,6 +111,11 @@ class ArchiveConfig:
     download_videos: bool = True
     # Preferred video quality when downloading: FHD | HD | SD | LD.
     video_quality: str = "FHD"
+    # In batch archives, build items directly from the listing API's JSON
+    # (which carries the full content body) instead of opening each item's
+    # page. Pages are still opened as a fallback when the API entry lacks
+    # usable content. Set False to force the old open-every-page behavior.
+    prefer_api_content: bool = True
 
 
 @dataclass
@@ -157,6 +162,10 @@ class Config:
             ]
         if v := env.get("ZARCHIVER_VIDEO_QUALITY"):
             self.archive.video_quality = v.strip().upper()
+        if (v := env.get("ZARCHIVER_PREFER_API_CONTENT")) is not None:
+            self.archive.prefer_api_content = v.strip().lower() in (
+                "1", "true", "yes"
+            )
         if (v := env.get("ZARCHIVER_HEADLESS")) is not None:
             self.browser.headless = v.strip().lower() in ("1", "true", "yes")
 

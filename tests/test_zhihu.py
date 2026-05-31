@@ -704,3 +704,193 @@ def test_api_stops_on_failed_request():
     assert src._collect_api_item_urls(base, label="collection") == ["a"]
 
 
+# ---------------------------------------------------------------------- #
+# Building items directly from API JSON (no page fetch)
+# ---------------------------------------------------------------------- #
+def test_archivable_entries_unwraps_and_filters():
+    payload = {
+        "data": [
+            {"content": {"type": "answer", "url": "https://www.zhihu.com/question/1/answer/2"}},
+            {"type": "article", "url": "https://zhuanlan.zhihu.com/p/3"},  # flat
+            {"content": {"type": "answer", "url": "u", "is_deleted": True}},  # deleted
+            {"content": {"type": "zvideo", "url": "u"}},  # wrong type
+            {"content": {"type": "answer"}},  # no url
+        ]
+    }
+    objs = P.archivable_entries_from_api(payload)
+    assert [o["type"] for o in objs] == ["answer", "article"]
+    # item_urls_from_api is the URL projection of the same set.
+    assert P.item_urls_from_api(payload) == [
+        "https://www.zhihu.com/question/1/answer/2",
+        "https://zhuanlan.zhihu.com/p/3",
+    ]
+
+
+def test_item_from_api_entry_answer():
+    obj = {
+        "type": "answer",
+        "id": 42,
+        "url": "https://www.zhihu.com/api/v4/answers/42",
+        "content": "<p>body</p>",
+        "excerpt": "ex",
+        "voteup_count": 7,
+        "comment_count": 3,
+        "created_time": 1700000000,
+        "updated_time": 1700000100,
+        "author": {"name": "A"},
+        "question": {"id": 9, "title": "Q?"},
+    }
+    item = P.item_from_api_entry(obj)
+    assert item is not None
+    assert item.content_type is ContentType.ANSWER
+    assert item.source_id == "42"
+    assert item.title == "Q?"
+    assert item.question_url == "https://www.zhihu.com/question/9"
+    assert item.url == "https://www.zhihu.com/question/9/answer/42"
+    assert item.voteup_count == 7 and item.comment_count == 3
+    assert item.author and item.author.name == "A"
+    assert "<p>body</p>" in item.content_html
+    assert item.created is not None and item.updated is not None
+
+
+def test_item_from_api_entry_article():
+    obj = {
+        "type": "article",
+        "id": 100,
+        "url": "https://zhuanlan.zhihu.com/p/100",
+        "title": "T",
+        "content": "<p>art</p>",
+        "author": {"name": "W"},
+        "column": {"title": "Col", "url": "https://zhuanlan.zhihu.com/col"},
+        "voteup_count": 1,
+    }
+    item = P.item_from_api_entry(obj)
+    assert item is not None
+    assert item.content_type is ContentType.ARTICLE
+    assert item.title == "T"
+    assert item.column_title == "Col"
+    assert item.url == "https://zhuanlan.zhihu.com/p/100"
+
+
+def test_item_from_api_entry_returns_none_without_content():
+    # Missing/empty content -> caller falls back to a page fetch.
+    assert P.item_from_api_entry(
+        {"type": "answer", "id": 1, "url": "u", "content": ""}
+    ) is None
+    assert P.item_from_api_entry(
+        {"type": "answer", "id": 1, "url": "u"}
+    ) is None
+    # Unknown type -> None.
+    assert P.item_from_api_entry(
+        {"type": "zvideo", "id": 1, "url": "u", "content": "x"}
+    ) is None
+
+
+def test_question_title_from_answers():
+    payload = {"data": [
+        {"id": 1, "question": {"title": "How?"}},
+    ]}
+    assert P.question_title_from_answers(payload) == "How?"
+    assert P.question_title_from_answers({"data": [{"id": 1}]}) is None
+    assert P.question_title_from_answers(None) is None
+
+
+def test_web_url_from_api_entry():
+    # Question-API answers expose only /api/v4/answers/<id>; rebuild the
+    # canonical /question/<qid>/answer/<aid> form for fetch()/dedup.
+    assert P.web_url_from_api_entry({
+        "type": "answer", "id": 2, "url": "https://www.zhihu.com/api/v4/answers/2",
+        "question": {"id": 9, "title": "Q?"},
+    }) == "https://www.zhihu.com/question/9/answer/2"
+    # Answer without a question id falls back to the entry url.
+    assert P.web_url_from_api_entry({
+        "type": "answer", "id": 2, "url": "https://www.zhihu.com/answer/2",
+    }) == "https://www.zhihu.com/answer/2"
+    assert P.web_url_from_api_entry({
+        "type": "article", "id": 100, "url": "x",
+    }) == "https://zhuanlan.zhihu.com/p/100"
+
+
+# ---------------------------------------------------------------------- #
+# Source: API-first batch with page fallback
+# ---------------------------------------------------------------------- #
+class _NoSleepBrowser:
+    """Stand-in browser whose polite_delay is a no-op (no real Chromium)."""
+
+    def polite_delay(self):
+        pass
+
+
+def _answer_entry(aid, content="<p>x</p>", qid=9, qtitle="Q?"):
+    return {
+        "type": "answer",
+        "id": aid,
+        "url": f"https://www.zhihu.com/api/v4/answers/{aid}",
+        "content": content,
+        "question": {"id": qid, "title": qtitle},
+    }
+
+
+def test_iter_api_or_fetch_uses_api_without_opening_page():
+    base = "https://www.zhihu.com/api/v4/collections/1/items?offset=0&limit=20"
+    pages = {base: {
+        "data": [{"content": _answer_entry(2)}, {"content": _answer_entry(3)}],
+        "paging": {"is_end": True},
+    }}
+    src, _ = _source_with_api(pages)
+    src._browser = _NoSleepBrowser()
+    src.config.archive.comments = False  # don't try to fetch comments
+    # Any attempt to open a page is a failure for this test.
+    def _boom(url):
+        raise AssertionError(f"page opened for {url!r}")
+    src.fetch = _boom  # type: ignore[assignment]
+    src._video_resolver = lambda: None
+    entries = src._walk_api_pages(base, label="collection")
+    items = list(src._iter_api_or_fetch(entries, batch=None))
+    assert [i.source_id for i in items] == ["2", "3"]
+    assert all(i.content_html for i in items)
+
+
+def test_iter_api_or_fetch_falls_back_when_no_content():
+    base = "https://www.zhihu.com/api/v4/collections/1/items?offset=0&limit=20"
+    # Entry has no body -> must fall back to fetching the page.
+    no_body = {"type": "answer", "id": 5,
+               "url": "https://www.zhihu.com/question/9/answer/5"}
+    pages = {base: {"data": [{"content": no_body}], "paging": {"is_end": True}}}
+    src, _ = _source_with_api(pages)
+    src._browser = _NoSleepBrowser()
+    src.config.archive.comments = False
+    src._video_resolver = lambda: None
+    fetched = []
+
+    def _fetch(url):
+        fetched.append(url)
+        return P.item_from_api_entry(_answer_entry(5))  # stand-in page item
+
+    src.fetch = _fetch  # type: ignore[assignment]
+    entries = src._walk_api_pages(base, label="collection")
+    items = list(src._iter_api_or_fetch(entries, batch=None))
+    assert fetched == ["https://www.zhihu.com/question/9/answer/5"]
+    assert [i.source_id for i in items] == ["5"]
+
+
+def test_prefer_api_content_off_always_fetches_page():
+    base = "https://www.zhihu.com/api/v4/collections/1/items?offset=0&limit=20"
+    pages = {base: {"data": [{"content": _answer_entry(2)}], "paging": {"is_end": True}}}
+    src, _ = _source_with_api(pages)
+    src._browser = _NoSleepBrowser()
+    src.config.archive.comments = False
+    src.config.archive.prefer_api_content = False  # force page path
+    src._video_resolver = lambda: None
+    fetched = []
+
+    def _fetch(url):
+        fetched.append(url)
+        return P.item_from_api_entry(_answer_entry(2))
+
+    src.fetch = _fetch  # type: ignore[assignment]
+    entries = src._walk_api_pages(base, label="collection")
+    list(src._iter_api_or_fetch(entries, batch=None))
+    assert fetched == ["https://www.zhihu.com/question/9/answer/2"]
+
+
