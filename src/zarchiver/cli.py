@@ -22,10 +22,18 @@ from rich.table import Table
 
 from zarchiver.ai import Summarizer, build_provider
 from zarchiver.config import Config
+from zarchiver.exporters.base import Exporter
 from zarchiver.exporters.html import HtmlExporter
 from zarchiver.exporters.obsidian import ObsidianExporter
+from zarchiver.ingest import Ingestor
 from zarchiver.logging_setup import setup_logging
-from zarchiver.pipeline import Action, ItemOutcome, Pipeline, make_image_fetcher
+from zarchiver.pipeline import (
+    Action,
+    ItemOutcome,
+    Pipeline,
+    export_items,
+    make_image_fetcher,
+)
 from zarchiver.sources.zhihu import ZhihuSource
 from zarchiver.sources.zhihu.browser import ZhihuBrowser
 from zarchiver.sources.zhihu.urls import classify
@@ -66,9 +74,10 @@ def _load_config(
 ) -> Config:
     cfg = Config.load(config_path)
     log.debug(
-        "config: db=%s, vault=%s, html=%s, ai=%s/%s, on_duplicate=%s, "
-        "headless=%s, comments=%s/max=%s",
-        cfg.archive.db_path, cfg.obsidian.vault_path, cfg.html.output_path,
+        "config: db=%s, assets=%s, auto_export=%s, vault=%s, html=%s, ai=%s/%s, "
+        "on_duplicate=%s, headless=%s, comments=%s/max=%s",
+        cfg.archive.db_path, cfg.archive.assets_root, cfg.archive.auto_export,
+        cfg.obsidian.vault_path, cfg.html.output_path,
         cfg.ai.enabled, cfg.ai.model, cfg.archive.on_duplicate,
         cfg.browser.headless, cfg.archive.comments, cfg.archive.max_comments,
     )
@@ -79,39 +88,84 @@ def _load_config(
     return cfg
 
 
-def _build_pipeline(cfg: Config, source: ZhihuSource, subdir: Optional[str] = None):
+def _build_exporters(
+    cfg: Config,
+    *,
+    subdir: Optional[str] = None,
+    only: Optional[list[str]] = None,
+) -> list[Exporter]:
+    """Construct the configured exporters (offline; read from the asset store).
+
+    ``only`` restricts to a subset by name (e.g. from ``export --format``);
+    otherwise the per-exporter ``enabled`` flags decide.
+    """
+    assets_root = cfg.archive.assets_root
+    exporters: list[Exporter] = []
+    want = set(only) if only else None
+    if cfg.obsidian.enabled and (want is None or "obsidian" in want):
+        exporters.append(
+            ObsidianExporter(
+                cfg.obsidian, assets_root=assets_root, subdir_override=subdir
+            )
+        )
+    if cfg.html.enabled and (want is None or "html" in want):
+        exporters.append(
+            HtmlExporter(cfg.html, assets_root=assets_root, subdir_override=subdir)
+        )
+    if not exporters:
+        log.warning("no matching exporters enabled; nothing will be written")
+    else:
+        log.debug("exporters: %s", ", ".join(e.name for e in exporters))
+    return exporters
+
+
+def _build_summarizer(cfg: Config, store) -> Optional[Summarizer]:
+    if not cfg.ai.enabled:
+        return None
+    if not cfg.ai.api_key:
+        log.warning(
+            "AI enabled but no API key (set DEEPSEEK_API_KEY); "
+            "continuing without summaries"
+        )
+        return None
+    try:
+        s = Summarizer(cfg.ai, build_provider(cfg.ai), store)
+        log.debug("AI summarizer ready (%s)", cfg.ai.model)
+        return s
+    except Exception as exc:
+        log.warning("AI disabled: %s", exc)
+        return None
+
+
+def _build_pipeline(
+    cfg: Config,
+    source: ZhihuSource,
+    subdir: Optional[str] = None,
+    *,
+    auto_export: bool = True,
+):
     from zarchiver.store import StateStore
 
     store = StateStore(cfg.archive.db_path)
     fetch = make_image_fetcher(cfg)
+    summarizer = _build_summarizer(cfg, store)
 
-    exporters = []
-    if cfg.obsidian.enabled:
-        exporters.append(
-            ObsidianExporter(cfg.obsidian, fetch=fetch, subdir_override=subdir)
-        )
-    if cfg.html.enabled:
-        exporters.append(
-            HtmlExporter(cfg.html, fetch=fetch, subdir_override=subdir)
-        )
-    if not exporters:
-        log.warning("no exporters enabled in config; nothing will be written")
-    else:
-        log.debug("exporters enabled: %s", ", ".join(e.name for e in exporters))
+    # Auto-export targets follow archive.auto_export; an empty list (or
+    # --no-export) means ingest only.
+    auto = bool(cfg.archive.auto_export) and auto_export
+    exporters = (
+        _build_exporters(cfg, subdir=subdir, only=cfg.archive.auto_export)
+        if auto
+        else []
+    )
 
-    summarizer = None
-    if cfg.ai.enabled:
-        if not cfg.ai.api_key:
-            log.warning(
-                "AI enabled but no API key (set DEEPSEEK_API_KEY); "
-                "continuing without summaries"
-            )
-        else:
-            try:
-                summarizer = Summarizer(cfg.ai, build_provider(cfg.ai), store)
-                log.debug("AI summarizer ready (%s)", cfg.ai.model)
-            except Exception as exc:
-                log.warning("AI disabled: %s", exc)
+    ingestor = Ingestor(
+        store,
+        assets_root=cfg.archive.assets_root,
+        fetch=fetch,
+        summarizer=summarizer,
+        download_images=cfg.obsidian.download_images or not cfg.html.embed_images,
+    )
 
     def ask(item) -> bool:
         return typer.confirm(f"  '{item.title}' already archived. Re-archive?")
@@ -121,10 +175,9 @@ def _build_pipeline(cfg: Config, source: ZhihuSource, subdir: Optional[str] = No
         source,
         exporters,
         store,
-        summarizer,
+        ingestor,
+        auto_export=auto,
         duplicate_prompt=ask,
-        # Per-item progress is emitted via logging (see Pipeline); no separate
-        # progress callback to avoid duplicate output.
     )
     return pipeline, store
 
@@ -141,6 +194,8 @@ def _report(outcomes: list[ItemOutcome]) -> None:
         f"[cyan]{counts[Action.UPDATED]} updated[/cyan]",
         f"[dim]{counts[Action.SKIPPED]} skipped[/dim]",
     ]
+    if counts[Action.EXPORTED]:
+        parts.append(f"[green]{counts[Action.EXPORTED]} exported[/green]")
     if counts[Action.FAILED]:
         parts.append(f"[red]{counts[Action.FAILED]} failed[/red]")
     out.print("Done: " + ", ".join(parts))
@@ -208,12 +263,21 @@ def archive(
         help="Place output in this subdirectory (overrides the batch-named "
         "default; use '' to force no subdir)",
     ),
+    no_export: bool = typer.Option(
+        False,
+        "--no-export",
+        help="Ingest into the DB (with images + AI) but skip exporting; run "
+        "`export` later to render Obsidian/HTML offline.",
+    ),
 ):
     """Archive a single answer/article, or a batch (collection/column/question).
 
-    The kind of URL is auto-detected: single answers and articles are archived
-    directly; collection, column, and question URLs are batch-archived, each
-    item going into a subdirectory named after the batch by default.
+    Archiving ingests the content, its comments, AI summary, and images into the
+    local database (the system of record), then by default renders the exporters
+    configured in ``archive.auto_export``. URL kind is auto-detected: single
+    answers/articles are archived directly; collection, column, and question
+    URLs are batch-archived, each item going into a subdirectory named after the
+    batch by default.
     """
     cfg = _load_config(config, no_ai, on_duplicate)
     if limit:
@@ -224,7 +288,9 @@ def archive(
         cfg.archive.max_comments = max_comments
     target = classify(url)
     source = ZhihuSource(cfg)
-    pipeline, store = _build_pipeline(cfg, source, subdir=subdir)
+    pipeline, store = _build_pipeline(
+        cfg, source, subdir=subdir, auto_export=not no_export
+    )
     try:
         if target.is_batch:
             outcomes = pipeline.archive_batch(url)
@@ -233,6 +299,65 @@ def archive(
         _report(outcomes)
     finally:
         source.close()
+        store.close()
+
+
+@app.command()
+def export(
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+    key: Optional[str] = typer.Option(
+        None, "--key", help="Export only the item with this key (platform:type:id)"
+    ),
+    content_type: Optional[str] = typer.Option(
+        None, "--type", help="Filter by content type: answer | article | pin"
+    ),
+    fmt: Optional[list[str]] = typer.Option(
+        None,
+        "--format",
+        "-f",
+        help="Exporter(s) to run: obsidian | html (repeatable; default all "
+        "enabled).",
+    ),
+    subdir: Optional[str] = typer.Option(
+        None, "--subdir", help="Force output into this subdirectory."
+    ),
+    skip_existing: bool = typer.Option(
+        False, "--skip-existing", help="Skip items whose output already exists."
+    ),
+    limit: int = typer.Option(0, "--limit", "-n", help="Max items (0 = all)."),
+):
+    """Render already-archived items from the database (fully offline).
+
+    Reads content + comments + the recorded image asset map from the DB and
+    writes Obsidian markdown / HTML, rewriting image links to the locally stored
+    assets. No network access — only items already ingested by ``archive`` are
+    exported.
+    """
+    from zarchiver.store import StateStore
+
+    cfg = Config.load(config)
+    store = StateStore(cfg.archive.db_path)
+    exporters = _build_exporters(cfg, subdir=subdir, only=fmt)
+    try:
+        if not exporters:
+            out.print("[yellow]No exporters selected; nothing to do.[/yellow]")
+            return
+        if key:
+            item = store.load_item(key)
+            items = [item] if item is not None else []
+            if not items:
+                out.print(f"[red]No archived item with key {key}.[/red]")
+                return
+        else:
+            items = list(
+                store.iter_items(content_type=content_type, limit=limit)
+            )
+        outcomes = export_items(
+            items, exporters, skip_existing=skip_existing,
+            progress=lambda msg: log.info("%s", msg),
+        )
+        _report(outcomes)
+    finally:
         store.close()
 
 

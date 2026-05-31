@@ -4,17 +4,20 @@ Archive Zhihu content (answers, articles, and pins/想法) to your local machine
 as **Obsidian markdown** and **standalone HTML**, with **AI-generated summaries,
 tags, and categories**.
 
-zarchiver is built modular-first: a platform-neutral core pipeline
-(`source → dedup → AI → exporters`) with pluggable sources and exporters, so
-support for other platforms or output formats can be added without touching the
-core.
+zarchiver is built modular-first: a platform-neutral core that **ingests**
+content into a local database (the system of record) and then **exports** it to
+output formats — `source → ingest (dedup + AI + assets → DB) → exporters` — with
+pluggable sources and exporters, so support for other platforms or output
+formats can be added without touching the core.
 
 ## Status
 
 Working: single + batch archiving (answers, articles, pins, collections,
-columns, questions), comment recording, Obsidian + HTML export with image
-download, AI summaries/tags via DeepSeek, and SQLite dedup. See [docs/architecture.md](docs/architecture.md)
-for the design, [docs/usage.md](docs/usage.md) for commands,
+columns, questions), comment recording, a DB-backed archive (full content +
+comments + AI + image asset map), offline Obsidian + HTML export with image
+localization, AI summaries/tags via DeepSeek, and content-hash dedup. See
+[docs/architecture.md](docs/architecture.md) for the design,
+[docs/usage.md](docs/usage.md) for commands,
 [docs/configuration.md](docs/configuration.md) for config, and
 [docs/scraping.md](docs/scraping.md) for the scraping approach.
 
@@ -23,8 +26,12 @@ for the design, [docs/usage.md](docs/usage.md) for commands,
 - **Robust scraping.** Zhihu blocks plain HTTP requests, so zarchiver drives a
   real (headful) Chromium via Playwright and parses the structured state Zhihu
   embeds in each page — far more reliable than scraping the DOM.
-- **Dual archive.** Every item is written as Obsidian-flavored markdown (YAML
-  frontmatter + downloaded images) *and* as a self-contained HTML file.
+- **Database-backed.** Every item — content, threaded comments, AI result, and
+  an image asset map — is stored in SQLite as the system of record; images are
+  downloaded once into a per-item assets directory.
+- **Dual archive, offline export.** A separate `export` step renders each item to
+  Obsidian-flavored markdown *and* self-contained HTML from the DB, with no
+  network access — re-render anytime without re-fetching.
 - **Faithful content.** Math is preserved as real LaTeX (`$...$` in markdown,
   MathJax in HTML) rather than images; article title images and footnote
   references are captured too.
@@ -32,8 +39,8 @@ for the design, [docs/usage.md](docs/usage.md) for commands,
   rendered as a `评论` section, capped at 100 per item by default.
 - **AI assist.** Summaries, tags, and a category are generated per item via an
   LLM (DeepSeek by default) and cached so re-runs never re-pay.
-- **Dedup.** Re-runs skip items whose output already exists on disk; choose
-  skip / update / ask per duplicate.
+- **Dedup.** Re-runs skip items already in the DB with an unchanged content
+  hash; choose skip / update / ask per duplicate.
 - **Batch or single.** Archive one URL, or a whole favorites collection or
   column.
 
@@ -55,6 +62,9 @@ uv run zarchiver login
 uv run zarchiver archive https://zhuanlan.zhihu.com/p/35562420
 uv run zarchiver archive https://www.zhihu.com/collection/<id>
 uv run zarchiver status
+
+# 5. Re-render from the database anytime (offline; no re-fetch)
+uv run zarchiver export -f obsidian
 ```
 
 ## Requirements

@@ -115,6 +115,9 @@ class ArchiveItem:
         voteup_count/comment_count: Engagement metrics, if known.
         topics: Platform-native topic/tag strings.
         comments: Recorded comments (threaded one level), capped by config.
+        asset_map: Maps a remote image URL to its local path (relative to the
+            DB-managed assets root). Populated at ingest when images are
+            downloaded; read by exporters to rewrite <img> offline.
         ai: Populated by the AI module after fetch.
         raw: Escape hatch holding the original parsed structure for debugging.
     """
@@ -139,6 +142,7 @@ class ArchiveItem:
     topics: list[str] = field(default_factory=list)
     excerpt: str = ""
     comments: list[Comment] = field(default_factory=list)
+    asset_map: dict[str, str] = field(default_factory=dict)
     ai: AIResult = field(default_factory=AIResult)
     raw: dict = field(default_factory=dict)
 

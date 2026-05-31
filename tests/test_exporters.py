@@ -21,6 +21,24 @@ from zarchiver.models import (
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
+PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+    "890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+)
+
+
+def _seed_asset(assets_root: Path, key: str, url: str, fname: str) -> str:
+    """Write a fake downloaded image and return its asset_map relative path.
+
+    Mirrors what ingest produces: ``<safe_key>/<filename>`` under the root.
+    """
+    safe = key.replace(":", "_")
+    rel = f"{safe}/{fname}"
+    target = assets_root / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(PNG)
+    return rel
+
 
 def _sample_item() -> ArchiveItem:
     item = ArchiveItem(
@@ -109,27 +127,44 @@ def test_html_export_self_contained(tmp_path):
     assert "▲ 42" in doc  # voteup metric
 
 
-def test_obsidian_export_with_image_download(tmp_path):
-    # Fake fetcher returns a 1x1 png for any url.
-    png = bytes.fromhex(
-        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
-        "890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
-    )
+def test_obsidian_export_with_local_assets(tmp_path):
+    # Ingest already downloaded the image; the item carries an asset_map and the
+    # file exists under assets_root. Export is offline: rewrite + copy.
+    assets_root = tmp_path / "assets"
     cfg = ObsidianConfig(
         vault_path=str(tmp_path / "vault"),
         folder="Zhihu",
         assets_folder="Zhihu/assets",
         download_images=True,
     )
-    exp = ObsidianExporter(cfg, fetch=lambda url: png)
     item = _sample_item()
+    rel = _seed_asset(
+        assets_root, item.key, "https://pic1.zhimg.com/x_hd.jpg", "x_hd.jpg"
+    )
+    item.asset_map = {"https://pic1.zhimg.com/x_hd.jpg": rel}
+    exp = ObsidianExporter(cfg, assets_root=str(assets_root))
     result = exp.export(item)
     assets = tmp_path / "vault" / "Zhihu" / "assets"
     files = list(assets.glob("*"))
-    assert files, "expected at least one downloaded image"
-    # Note references the local asset via relative path.
+    assert files, "expected the stored image copied into the vault assets dir"
     text = result.path.read_text(encoding="utf-8")
     assert "assets/" in text
+
+
+def test_obsidian_export_keeps_remote_when_not_in_map(tmp_path):
+    # Image was never downloaded (not in asset_map) → keep remote URL, offline.
+    assets_root = tmp_path / "assets"
+    assets_root.mkdir()
+    cfg = ObsidianConfig(
+        vault_path=str(tmp_path / "vault"), folder="Zhihu", download_images=True
+    )
+    item = _sample_item()  # asset_map empty
+    text = (
+        ObsidianExporter(cfg, assets_root=str(assets_root))
+        .export(item)
+        .path.read_text(encoding="utf-8")
+    )
+    assert "https://pic1.zhimg.com/x_hd.jpg" in text
 
 
 # ---------------------------------------------------------------------- #
@@ -183,20 +218,19 @@ def test_html_no_mathjax_without_formulas(tmp_path):
 # Title image
 # ---------------------------------------------------------------------- #
 def test_obsidian_title_image_prepended(tmp_path):
-    png = bytes.fromhex(
-        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
-        "890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
-    )
+    assets_root = tmp_path / "assets"
     cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=True)
     item = _sample_item()
     item.title_image = "https://pic1.zhimg.com/title.jpg"
+    rel = _seed_asset(assets_root, item.key, item.title_image, "title.jpg")
+    item.asset_map = {item.title_image: rel}
     body = (
-        ObsidianExporter(cfg, fetch=lambda u: png)
+        ObsidianExporter(cfg, assets_root=str(assets_root))
         .export(item)
         .path.read_text(encoding="utf-8")
         .split("---\n", 2)[2]
     )
-    # Title image appears as the first content image (downloaded, local path).
+    # Title image appears as the first content image (local path).
     assert "![" in body
     assert "assets/" in body
     # It should come before the body text.
@@ -284,10 +318,7 @@ def test_subdir_override_empty_disables(tmp_path):
 
 
 def test_obsidian_batch_assets_in_subdir(tmp_path):
-    png = bytes.fromhex(
-        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
-        "890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
-    )
+    assets_root = tmp_path / "assets"
     cfg = ObsidianConfig(
         vault_path=str(tmp_path / "v"),
         folder="Zhihu",
@@ -295,7 +326,12 @@ def test_obsidian_batch_assets_in_subdir(tmp_path):
         download_images=True,
         batch_subdirs=True,
     )
-    result = ObsidianExporter(cfg, fetch=lambda u: png).export(_batch_item())
+    item = _batch_item()
+    rel = _seed_asset(
+        assets_root, item.key, "https://pic1.zhimg.com/x_hd.jpg", "x_hd.jpg"
+    )
+    item.asset_map = {"https://pic1.zhimg.com/x_hd.jpg": rel}
+    result = ObsidianExporter(cfg, assets_root=str(assets_root)).export(item)
     # Assets nest inside the batch subdir (<folder>/<batch>/assets), so each
     # batch is self-contained and the note links to "assets/..." relatively.
     subdir = "收藏夹 好文精选"

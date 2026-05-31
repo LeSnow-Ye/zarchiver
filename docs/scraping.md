@@ -115,9 +115,12 @@ It scrolls until no new links appear (or the cap is reached), then visits each.
 ## Images and referer
 
 `pic*.zhimg.com` checks the `Referer` header, so the image downloader sends
-`Referer: https://www.zhihu.com/` with a browser-like user agent. Filenames are
-content-hash based and the extension is sniffed from magic bytes when the URL
-lacks one.
+`Referer: https://www.zhihu.com/` with a browser-like user agent. Images are
+downloaded **once at ingest** into `archive.assets_root/<item-key>/`; filenames
+are content-hash based and the extension is sniffed from magic bytes when the
+URL lacks one. The item's `asset_map` (remote URL → stored relative path) is
+saved in the DB, so the later export step rewrites `<img>` links offline — no
+network access at export time.
 
 ## Comments
 

@@ -20,17 +20,25 @@ Values are resolved in this order, later winning:
 | `ZARCHIVER_AI_MODEL` | `ai.model` | LLM model name. |
 | `ZHIHU_COOKIE` | `browser.cookie_string` | Cookie string for headless/server use. |
 | `ZARCHIVER_VAULT` | `obsidian.vault_path` | Vault root. |
-| `ZARCHIVER_DB` | `archive.db_path` | Dedup/cache database path. |
+| `ZARCHIVER_DB` | `archive.db_path` | Archive database path. |
+| `ZARCHIVER_ASSETS_ROOT` | `archive.assets_root` | Downloaded-image store root. |
+| `ZARCHIVER_AUTO_EXPORT` | `archive.auto_export` | Comma-separated exporters to auto-run (e.g. `obsidian,html`). |
 | `ZARCHIVER_HEADLESS` | `browser.headless` | `1`/`true` forces headless. |
 
 ## Sections
 
 ### `[archive]`
 
+The database is the **system of record**: archiving ingests the full content,
+comments, AI results, and an image asset map into it, and exporters render from
+it (see [usage](usage.md)).
+
 | Key | Default | Notes |
 | --- | --- | --- |
-| `db_path` | `zarchiver.db` | SQLite file for dedup index + AI cache. |
-| `on_duplicate` | `skip` | `skip`, `update`, or `ask`. |
+| `db_path` | `zarchiver.db` | SQLite file: items + comments + AI cache + asset map. |
+| `assets_root` | `archive/assets` | Where images are downloaded, one subdir per item key. The DB records each image's relative path. |
+| `auto_export` | `["obsidian", "html"]` | Exporters to run automatically after ingest. Empty list = ingest only; run `export` later. |
+| `on_duplicate` | `skip` | `skip`, `update`, or `ask`. Matched by content hash in the DB. |
 | `comments` | `true` | Record comments (root + replies). Disable per run with `--no-comments`. |
 | `max_comments` | `100` | Max comments per item *including* child replies (0 = all). Override per run with `--max-comments`. |
 
@@ -55,7 +63,7 @@ Values are resolved in this order, later winning:
 | `vault_path` | `vault` | Vault root; open this in Obsidian. |
 | `folder` | `Zhihu` | Subfolder for notes. |
 | `assets_folder` | `Zhihu/assets` | Subfolder for images (relative to vault). Used for non-batch archives; batch items keep assets in `<batch>/assets`. |
-| `download_images` | `true` | Download images and rewrite links. |
+| `download_images` | `true` | Copy locally-stored images into the vault on export. Images are downloaded once at ingest (into `archive.assets_root`); this controls whether notes link to local copies or keep remote URLs. |
 | `filename_template` | `{title} - {author}` | Fields: `{title} {author} {source_id} {content_type} {date}`. |
 | `batch_subdirs` | `true` | Group batch items into a subdir named after the collection/column/question. Override per run with `--subdir`. |
 | `use_cli` | `false` | Use the Obsidian CLI instead of writing files (see below). |
@@ -67,7 +75,7 @@ Values are resolved in this order, later winning:
 | --- | --- | --- |
 | `enabled` | `true` | Write standalone HTML. |
 | `output_path` | `archive/html` | Output directory. |
-| `embed_images` | `false` | Inline images as base64 (single-file archive). |
+| `embed_images` | `false` | Inline images as base64 (single-file archive), read from the locally stored assets. |
 | `batch_subdirs` | `true` | Group batch items into a subdir named after the batch. |
 
 ### `[ai]`

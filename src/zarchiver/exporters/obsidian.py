@@ -23,7 +23,7 @@ import yaml
 from markdownify import markdownify as md_convert
 
 from zarchiver.config import ObsidianConfig
-from zarchiver.exporters.assets import Fetcher, download_images, localize_images
+from zarchiver.exporters.assets import copy_assets, rewrite_with_asset_map
 from zarchiver.exporters.base import Exporter, ExportResult
 from zarchiver.exporters.comments import comments_markdown_fragment
 from zarchiver.exporters.formulas import (
@@ -53,11 +53,13 @@ class ObsidianExporter(Exporter):
         self,
         config: ObsidianConfig,
         *,
-        fetch: Optional[Fetcher] = None,
+        assets_root: Optional[str] = None,
         subdir_override: Optional[str] = None,
     ):
         self.config = config
-        self._fetch = fetch  # image fetcher; if None, images are not downloaded
+        # Root of the DB-managed asset store (where ingest saved images). When
+        # None, images are not localized and remote URLs are kept as-is.
+        self.assets_root = Path(assets_root) if assets_root else None
         # An explicit subdir (from --subdir) forces all items into this folder,
         # regardless of batch context.
         self._subdir_override = subdir_override
@@ -118,12 +120,15 @@ class ObsidianExporter(Exporter):
         # markdownify can't escape LaTeX-significant characters.
         body_html, formulas = extract_formulas_for_markdown(body_html)
 
-        if self.config.download_images and self._fetch is not None:
-            # Relative path from a note in notes_dir to its assets dir.
+        # Rewrite <img> from the pre-downloaded asset map (offline). Images not
+        # in the map keep their remote URL as a graceful degradation.
+        if self.config.download_images and self.assets_root is not None:
             rel_prefix = self._assets_rel_prefix(notes_dir, assets_dir)
-            body_html, pairs = localize_images(body_html, rel_prefix)
-            if pairs:
-                download_images(pairs, assets_dir, self._fetch)
+            body_html, refs = rewrite_with_asset_map(
+                body_html, item.asset_map, rel_prefix
+            )
+            if refs:
+                copy_assets(refs, self.assets_root, assets_dir)
 
         body_md = md_convert(body_html, heading_style="ATX", bullets="-")
         body_md = restore_formulas_markdown(body_md, formulas)

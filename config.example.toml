@@ -5,15 +5,26 @@
 #
 # Secrets can also be supplied via environment variables, which override values
 # here:
-#   DEEPSEEK_API_KEY   -> ai.api_key
-#   ZHIHU_COOKIE       -> browser.cookie_string
-#   ZARCHIVER_VAULT    -> obsidian.vault_path
-#   ZARCHIVER_DB       -> archive.db_path
-#   ZARCHIVER_HEADLESS -> browser.headless ("1"/"true" to force headless)
+#   DEEPSEEK_API_KEY      -> ai.api_key
+#   ZHIHU_COOKIE          -> browser.cookie_string
+#   ZARCHIVER_VAULT       -> obsidian.vault_path
+#   ZARCHIVER_DB          -> archive.db_path
+#   ZARCHIVER_ASSETS_ROOT -> archive.assets_root
+#   ZARCHIVER_AUTO_EXPORT -> archive.auto_export (comma-separated, e.g. "obsidian,html")
+#   ZARCHIVER_HEADLESS    -> browser.headless ("1"/"true" to force headless)
 
 [archive]
+# The database is the system of record: full content, comments, AI results, and
+# the image asset map all live here. Exporters render from it.
 db_path = "zarchiver.db"
-# What to do when an item was already archived: "skip", "update", or "ask".
+# Root directory for downloaded images. Each item gets its own subdirectory
+# (one per item key); the DB records the relative path to each image.
+assets_root = "archive/assets"
+# Exporters to run automatically after `archive` ingests an item. Set to an
+# empty list ([]) to ingest only, then run `zarchiver export` later.
+auto_export = ["obsidian", "html"]
+# What to do when an item was already archived (matched by content hash in the
+# DB): "skip", "update", or "ask".
 on_duplicate = "skip"
 # Record comments on archived content (root + child replies).
 comments = true
@@ -45,6 +56,9 @@ folder = "Zhihu"
 # Assets folder for non-batch archives. Batch items keep assets self-contained
 # in <folder>/<batch>/assets instead.
 assets_folder = "Zhihu/assets"
+# Copy locally-stored images into the vault on export (images are downloaded
+# once at ingest into archive.assets_root; this just controls whether the note
+# references local copies or keeps remote URLs).
 download_images = true
 # Available fields: {title} {author} {source_id} {content_type} {date}
 filename_template = "{title} - {author}"
@@ -60,7 +74,8 @@ cli_vault_name = ""
 [html]
 enabled = true
 output_path = "archive/html"
-# Inline images as base64 for fully self-contained HTML files.
+# Inline images as base64 for fully self-contained HTML files (read from the
+# locally stored assets; no network access at export time).
 embed_images = false
 # Mirror Obsidian: batch archives go in a subdirectory named after the batch.
 batch_subdirs = true

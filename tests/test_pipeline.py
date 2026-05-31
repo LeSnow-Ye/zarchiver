@@ -1,4 +1,4 @@
-"""Pipeline tests: dedup policies, AI gating, exporter fan-out (offline)."""
+"""Pipeline tests: DB-based dedup, ingest, exporter fan-out, export (offline)."""
 
 import tempfile
 from pathlib import Path
@@ -7,17 +7,18 @@ import pytest
 
 from zarchiver.config import Config
 from zarchiver.exporters.base import Exporter, ExportResult
+from zarchiver.ingest import Ingestor
 from zarchiver.models import ArchiveItem, ContentType
-from zarchiver.pipeline import Action, Pipeline
+from zarchiver.pipeline import Action, Pipeline, export_items
 from zarchiver.sources.base import Source, SourceError
 from zarchiver.store import StateStore
 
 
-def _item(content="<p>hello</p>"):
+def _item(content="<p>hello</p>", source_id="1"):
     return ArchiveItem(
         platform="zhihu",
         content_type=ContentType.ARTICLE,
-        source_id="1",
+        source_id=source_id,
         url="https://zhuanlan.zhihu.com/p/1",
         title="T",
         content_html=content,
@@ -43,7 +44,7 @@ class FakeSource(Source):
 
 
 class RecordingExporter(Exporter):
-    """Exporter that writes a real file so file-existence dedup can be tested."""
+    """Exporter that records each item it was asked to export."""
 
     name = "rec"
 
@@ -70,13 +71,20 @@ def store():
         s.close()
 
 
+def _pipeline(cfg, item, exporters, store, tmp_path, **kw):
+    ingestor = Ingestor(store, assets_root=tmp_path / "assets", fetch=None)
+    return Pipeline(cfg, FakeSource(item), exporters, store, ingestor, **kw)
+
+
 def test_new_item_archived_and_exported(tmp_path, store):
     exp = RecordingExporter(tmp_path)
-    p = Pipeline(Config(), FakeSource(_item()), [exp], store)
+    p = _pipeline(Config(), _item(), [exp], store, tmp_path)
     out = p.archive_url("u")
     assert out.action == Action.ARCHIVED
     assert len(exp.exported) == 1
     assert store.count() == 1
+    # Item persisted in full.
+    assert store.load_item(_item().key) is not None
 
 
 def test_duplicate_skip_default(tmp_path, store):
@@ -84,11 +92,11 @@ def test_duplicate_skip_default(tmp_path, store):
     cfg = Config()
     cfg.archive.on_duplicate = "skip"
     exp = RecordingExporter(tmp_path)
-    p = Pipeline(cfg, FakeSource(item), [exp], store)
-    p.archive_url("u")  # writes the file
-    out2 = p.archive_url("u")  # file exists → skip
+    p = _pipeline(cfg, item, [exp], store, tmp_path)
+    p.archive_url("u")  # ingests + records in DB
+    out2 = p.archive_url("u")  # same content_hash → skip
     assert out2.action == Action.SKIPPED
-    assert out2.detail == "exists"
+    assert out2.detail == "unchanged"
     assert len(exp.exported) == 1  # not exported again
 
 
@@ -97,57 +105,65 @@ def test_duplicate_update_policy(tmp_path, store):
     cfg = Config()
     cfg.archive.on_duplicate = "update"
     exp = RecordingExporter(tmp_path)
-    p = Pipeline(cfg, FakeSource(item), [exp], store)
+    p = _pipeline(cfg, item, [exp], store, tmp_path)
     p.archive_url("u")
     out2 = p.archive_url("u")
     assert out2.action == Action.UPDATED
     assert len(exp.exported) == 2
 
 
-def test_skip_only_when_file_exists(tmp_path, store):
-    # Dedup is file-based: a fresh output dir means archive, even if the item
-    # is already in the SQLite store from a prior run.
-    cfg = Config()
-    cfg.archive.on_duplicate = "skip"
-    item = _item()
-    # First run writes into dir A.
-    a = RecordingExporter(tmp_path / "a")
-    Pipeline(cfg, FakeSource(item), [a], store).archive_url("u")
-    # Second run targets a different dir B (no file there) → archives again.
-    b = RecordingExporter(tmp_path / "b")
-    out = Pipeline(cfg, FakeSource(item), [b], store).archive_url("u")
-    assert out.action == Action.ARCHIVED
-    assert len(b.exported) == 1
-
-
-def test_partial_outputs_trigger_archive(tmp_path, store):
-    # Two exporters; only one has its file present → not a full duplicate.
+def test_dedup_is_db_based_not_file_based(tmp_path, store):
+    # Once in the DB, an item is a duplicate regardless of where output went.
     cfg = Config()
     cfg.archive.on_duplicate = "skip"
     item = _item()
     a = RecordingExporter(tmp_path / "a")
+    _pipeline(cfg, item, [a], store, tmp_path).archive_url("u")
+    # Second run with a different output dir still skips (DB knows the item).
     b = RecordingExporter(tmp_path / "b")
-    # Pre-create only A's output.
-    a.export(item)
-    out = Pipeline(cfg, FakeSource(item), [a, b], store).archive_url("u")
-    assert out.action == Action.ARCHIVED
-    assert len(b.exported) == 1  # missing output B was written
+    out = _pipeline(cfg, item, [b], store, tmp_path).archive_url("u")
+    assert out.action == Action.SKIPPED
+    assert len(b.exported) == 0
+
+
+def test_changed_content_reingested_on_update(tmp_path, store):
+    cfg = Config()
+    cfg.archive.on_duplicate = "skip"
+    p1 = _pipeline(cfg, _item(content="<p>v1</p>"), [], store, tmp_path)
+    assert p1.archive_url("u").action == Action.ARCHIVED
+    # Same key, different content → "changed"; skip policy still skips.
+    p2 = _pipeline(cfg, _item(content="<p>v2</p>"), [], store, tmp_path)
+    assert p2.archive_url("u").action == Action.SKIPPED
+    # With update policy, changed content is re-ingested.
+    cfg.archive.on_duplicate = "update"
+    p3 = _pipeline(cfg, _item(content="<p>v2</p>"), [], store, tmp_path)
+    assert p3.archive_url("u").action == Action.UPDATED
+    assert store.load_item(_item().key).content_html == "<p>v2</p>"
 
 
 def test_ask_policy_uses_prompt(tmp_path, store):
     cfg = Config()
     cfg.archive.on_duplicate = "ask"
     exp = RecordingExporter(tmp_path)
-    p = Pipeline(
-        cfg, FakeSource(_item()), [exp], store, duplicate_prompt=lambda i: True
+    p = _pipeline(
+        cfg, _item(), [exp], store, tmp_path, duplicate_prompt=lambda i: True
     )
     p.archive_url("u")
     out2 = p.archive_url("u")
     assert out2.action == Action.UPDATED
 
 
+def test_no_auto_export(tmp_path, store):
+    exp = RecordingExporter(tmp_path)
+    p = _pipeline(Config(), _item(), [exp], store, tmp_path, auto_export=False)
+    out = p.archive_url("u")
+    assert out.action == Action.ARCHIVED
+    assert len(exp.exported) == 0  # ingested but not exported
+    assert store.count() == 1
+
+
 def test_source_error_reported(tmp_path, store):
-    p = Pipeline(Config(), FakeSource(None), [RecordingExporter(tmp_path)], store)
+    p = _pipeline(Config(), None, [RecordingExporter(tmp_path)], store, tmp_path)
     out = p.archive_url("u")
     assert out.action == Action.FAILED
     assert "boom" in out.detail
@@ -163,8 +179,39 @@ def test_exporter_failure_does_not_crash(tmp_path, store):
         def export(self, item):
             raise RuntimeError("disk full")
 
-    p = Pipeline(Config(), FakeSource(_item()), [BadExporter()], store)
+    p = _pipeline(Config(), _item(), [BadExporter()], store, tmp_path)
     out = p.archive_url("u")
-    # Item still recorded; export failure captured in results.
+    # Item still ingested; export failure captured in results.
     assert out.action == Action.ARCHIVED
     assert any("failed" in e.detail for e in out.exports)
+
+
+# ---------------------------------------------------------------------- #
+# export_items (standalone export from DB)
+# ---------------------------------------------------------------------- #
+def test_export_items_renders_all(tmp_path, store):
+    exp = RecordingExporter(tmp_path)
+    items = [_item(source_id="1"), _item(source_id="2")]
+    outcomes = export_items(items, [exp])
+    assert len(outcomes) == 2
+    assert all(o.action == Action.EXPORTED for o in outcomes)
+    assert len(exp.exported) == 2
+
+
+def test_export_items_skip_existing(tmp_path, store):
+    exp = RecordingExporter(tmp_path)
+    item = _item()
+    export_items([item], [exp])  # writes the file
+    exp.exported.clear()
+    outcomes = export_items([item], [exp], skip_existing=True)
+    assert outcomes[0].action == Action.SKIPPED
+    assert len(exp.exported) == 0
+
+
+def test_export_items_overwrites_by_default(tmp_path, store):
+    exp = RecordingExporter(tmp_path)
+    item = _item()
+    export_items([item], [exp])
+    outcomes = export_items([item], [exp])  # no skip_existing → re-export
+    assert outcomes[0].action == Action.EXPORTED
+    assert len(exp.exported) == 2

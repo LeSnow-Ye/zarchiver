@@ -8,16 +8,20 @@ base64 for a single-file archive.
 
 from __future__ import annotations
 
-import base64
 import html as html_lib
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
 from bs4 import BeautifulSoup
 
 from zarchiver.config import HtmlConfig
-from zarchiver.exporters.assets import Fetcher, download_images, localize_images
+from zarchiver.exporters.assets import (
+    copy_assets,
+    inline_from_asset_map,
+    rewrite_with_asset_map,
+)
 from zarchiver.exporters.base import Exporter, ExportResult
 from zarchiver.exporters.comments import comments_html_fragment
 from zarchiver.exporters.formulas import render_formulas_html
@@ -105,11 +109,11 @@ class HtmlExporter(Exporter):
         self,
         config: HtmlConfig,
         *,
-        fetch: Optional[Fetcher] = None,
+        assets_root: Optional[str] = None,
         subdir_override: Optional[str] = None,
     ):
         self.config = config
-        self._fetch = fetch
+        self.assets_root = Path(assets_root) if assets_root else None
         self._subdir_override = subdir_override
         self.base_out_dir = Path(config.output_path)
 
@@ -151,13 +155,20 @@ class HtmlExporter(Exporter):
         has_formulas = render_formulas_html(soup)
         content_html = str(soup)
 
-        if self._fetch is not None:
+        # Rewrite <img> offline from the pre-downloaded asset map. Either inline
+        # as base64 (self-contained) or rewrite to a sibling assets/ folder and
+        # copy the stored files in. Images missing from the map keep remote URLs.
+        if self.assets_root is not None:
             if self.config.embed_images:
-                content_html = self._inline_images(content_html)
+                content_html = inline_from_asset_map(
+                    content_html, item.asset_map, self.assets_root
+                )
             else:
-                content_html, pairs = localize_images(content_html, "assets")
-                if pairs:
-                    download_images(pairs, assets_dir, self._fetch)
+                content_html, refs = rewrite_with_asset_map(
+                    content_html, item.asset_map, "assets"
+                )
+                if refs:
+                    copy_assets(refs, self.assets_root, assets_dir)
 
         document = _TEMPLATE.format(
             title=html_lib.escape(item.title),
@@ -178,20 +189,19 @@ class HtmlExporter(Exporter):
         if not item.title_image:
             return ""
         src = item.title_image
-        if self._fetch is not None:
+        stored = item.asset_map.get(item.title_image) if self.assets_root else None
+        if stored:
             if self.config.embed_images:
-                data = self._fetch(src)
-                if data:
-                    b64 = base64.b64encode(data).decode("ascii")
-                    src = f"data:{_guess_mime(item.title_image)};base64,{b64}"
-            else:
-                _, pairs = localize_images(
-                    f'<img src="{item.title_image}">', "assets"
+                inlined = inline_from_asset_map(
+                    f'<img src="{item.title_image}">', item.asset_map,
+                    self.assets_root,
                 )
-                if pairs:
-                    saved = download_images(pairs, assets_dir, self._fetch)
-                    fname = saved.get(pairs[0][0], pairs[0][1])
-                    src = f"assets/{fname}"
+                m = re.search(r'src="([^"]+)"', inlined)
+                if m:
+                    src = m.group(1)
+            else:
+                copy_assets([stored], self.assets_root, assets_dir)
+                src = f"assets/{Path(stored).name}"
         return (
             f'<img class="title-image" src="{html_lib.escape(src)}" '
             f'alt="{html_lib.escape(item.title)}">'
@@ -240,35 +250,3 @@ class HtmlExporter(Exporter):
             bits.append(f'<div class="tags">{spans}</div>')
         return "\n".join(bits)
 
-    def _inline_images(self, html: str) -> str:
-        from bs4 import BeautifulSoup
-        from zarchiver.exporters.assets import _best_src
-
-        soup = BeautifulSoup(html, "html.parser")
-        for img in soup.find_all("img"):
-            url = _best_src(img)
-            if not url:
-                continue
-            data = self._fetch(url) if self._fetch else None
-            if not data:
-                continue
-            mime = _guess_mime(url)
-            b64 = base64.b64encode(data).decode("ascii")
-            img["src"] = f"data:{mime};base64,{b64}"
-            for attr in ("data-original", "data-actualsrc", "srcset"):
-                if img.has_attr(attr):
-                    del img[attr]
-        return str(soup)
-
-
-def _guess_mime(url: str) -> str:
-    u = url.lower().split("?")[0]
-    if u.endswith(".png"):
-        return "image/png"
-    if u.endswith(".gif"):
-        return "image/gif"
-    if u.endswith(".webp"):
-        return "image/webp"
-    if u.endswith(".svg"):
-        return "image/svg+xml"
-    return "image/jpeg"

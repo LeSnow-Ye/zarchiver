@@ -1,16 +1,18 @@
-"""The archiving pipeline.
+"""The archiving pipeline: ingest (write) and export (render).
 
-Orchestrates the full flow for one or many items:
+The flow is split into two halves around the store as the system of record:
 
-    source.fetch ─▶ dedup check ─▶ (AI summarize) ─▶ each exporter
+* **Ingest** — ``source.fetch`` → DB-based dedup (by ``content_hash``) → download
+  images + AI enrichment + persist the full item (delegated to
+  :class:`~zarchiver.ingest.Ingestor`). Optionally auto-exports just-ingested
+  items.
+* **Export** — render stored items to each exporter, fully offline (images are
+  rewritten from the asset map recorded at ingest). Used both for auto-export
+  and by the standalone ``export`` command (:func:`export_items`).
 
-It is deliberately small and platform-agnostic: it depends on the ``Source``,
-``Exporter``, ``Summarizer`` and ``StateStore`` abstractions, never on Zhihu or
-markdown specifics. AI gating and which exporters run are driven by config.
-
-Duplicate detection is based on **whether the output already exists on disk**:
-an item is a duplicate when every enabled exporter's target file is already
-present. The ``on_duplicate`` policy (skip/update/ask) then decides what to do.
+It depends only on the ``Source``, ``Exporter``, ``Ingestor`` and ``StateStore``
+abstractions, never on Zhihu or markdown specifics. Duplicate handling is driven
+by the ``on_duplicate`` config policy against the DB, not the filesystem.
 """
 
 from __future__ import annotations
@@ -22,12 +24,11 @@ from typing import Callable, Iterable, Optional
 
 import httpx
 
-from zarchiver.ai import Summarizer
 from zarchiver.config import Config
 from zarchiver.exporters.base import Exporter, ExportResult
+from zarchiver.ingest import Ingestor
 from zarchiver.models import ArchiveItem
 from zarchiver.sources.base import Source, SourceError
-from zarchiver.store import StateStore
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class Action(str, Enum):
     ARCHIVED = "archived"
     UPDATED = "updated"
     SKIPPED = "skipped"
+    EXPORTED = "exported"
     FAILED = "failed"
 
 
@@ -50,25 +52,87 @@ class ItemOutcome:
 
 # Callback used to resolve "ask" duplicate decisions; returns True to re-archive.
 DuplicatePrompt = Callable[[ArchiveItem], bool]
+Progress = Callable[[str], None]
 
 
+# ---------------------------------------------------------------------- #
+# Export fan-out (shared by auto-export and the export command)
+# ---------------------------------------------------------------------- #
+def _run_exporters(
+    item: ArchiveItem,
+    exporters: list[Exporter],
+    progress: Progress,
+) -> list[ExportResult]:
+    exports: list[ExportResult] = []
+    for exporter in exporters:
+        try:
+            result = exporter.export(item)
+            exports.append(result)
+            if result.path:
+                log.debug("  [%s] -> %s", exporter.name, result.path)
+        except Exception as exc:
+            log.error("exporter %s failed for %r: %s", exporter.name, item.title, exc)
+            exports.append(
+                ExportResult(exporter=exporter.name, detail=f"failed: {exc}")
+            )
+    return exports
+
+
+def export_items(
+    items: Iterable[ArchiveItem],
+    exporters: list[Exporter],
+    *,
+    skip_existing: bool = False,
+    progress: Optional[Progress] = None,
+) -> list[ItemOutcome]:
+    """Render stored items to each exporter (offline). Used by ``export``.
+
+    With ``skip_existing`` True, an item whose every exporter target already
+    exists on disk is skipped; otherwise outputs are overwritten (export is a
+    deterministic function of the DB, so re-export is cheap and safe).
+    """
+    emit = progress or (lambda msg: None)
+    outcomes: list[ItemOutcome] = []
+    for item in items:
+        if skip_existing and exporters and all(
+            e.already_exists(item) for e in exporters
+            if e.target_path(item) is not None
+        ):
+            emit(f"skip   {item.title}")
+            outcomes.append(
+                ItemOutcome(item, Action.SKIPPED, url=item.url, detail="exists")
+            )
+            continue
+        exports = _run_exporters(item, exporters, emit)
+        emit(f"export {item.title}")
+        outcomes.append(
+            ItemOutcome(item, Action.EXPORTED, url=item.url, exports=exports)
+        )
+    return outcomes
+
+
+# ---------------------------------------------------------------------- #
+# Ingest pipeline
+# ---------------------------------------------------------------------- #
 class Pipeline:
     def __init__(
         self,
         config: Config,
         source: Source,
         exporters: list[Exporter],
-        store: StateStore,
-        summarizer: Optional[Summarizer] = None,
+        store,
+        ingestor: Ingestor,
         *,
+        auto_export: bool = True,
         duplicate_prompt: Optional[DuplicatePrompt] = None,
-        progress: Optional[Callable[[str], None]] = None,
+        progress: Optional[Progress] = None,
     ):
         self.config = config
         self.source = source
         self.exporters = exporters
         self.store = store
-        self.summarizer = summarizer
+        self.ingestor = ingestor
+        self.auto_export = auto_export
         self.duplicate_prompt = duplicate_prompt
         self._progress = progress or (lambda msg: None)
 
@@ -99,48 +163,30 @@ class Pipeline:
 
     # ------------------------------------------------------------------ #
     def _process(self, item: ArchiveItem) -> ItemOutcome:
-        # Duplicate detection is based purely on whether the output already
-        # exists on disk: an item counts as a duplicate when every enabled
-        # exporter's target file is already present.
-        targeted = [e for e in self.exporters if e.target_path(item) is not None]
-        exists = bool(targeted) and all(e.already_exists(item) for e in targeted)
+        # Dedup against the DB by content_hash (not the filesystem).
+        status = self.store.status_for(item)
+        exists = status != "new"
         action = self._decide(item, exists)
         if action is None:
-            log.info("skip (exists): %r", item.title)
+            log.info("skip (%s): %r", status, item.title)
             self._progress(f"skip   {item.title}")
-            return ItemOutcome(
-                item, Action.SKIPPED, url=item.url, detail="exists"
-            )
+            return ItemOutcome(item, Action.SKIPPED, url=item.url, detail=status)
         log.debug(
-            "processing %r [%s] (exists=%s -> %s)",
-            item.title, item.key, exists, action.value,
+            "processing %r [%s] (status=%s -> %s)",
+            item.title, item.key, status, action.value,
         )
 
-        # AI enrichment (cached by content hash inside the summarizer).
-        if self.summarizer is not None:
-            try:
-                item.ai = self.summarizer.summarize(item)
-            except Exception as exc:  # AI must never block archiving
-                log.warning("AI summarization failed for %r: %s", item.title, exc)
-                self._progress(f"  ai failed: {exc}")
+        # Ingest: download images, run AI, persist the full item to the store.
+        try:
+            self.ingestor.ingest(item)
+        except Exception as exc:
+            log.error("ingest failed for %r: %s", item.title, exc)
+            return ItemOutcome(item, Action.FAILED, url=item.url, detail=str(exc))
 
         exports: list[ExportResult] = []
-        for exporter in self.exporters:
-            try:
-                result = exporter.export(item)
-                exports.append(result)
-                if result.path:
-                    log.debug("  [%s] -> %s", exporter.name, result.path)
-            except Exception as exc:
-                log.error(
-                    "exporter %s failed for %r: %s",
-                    exporter.name, item.title, exc,
-                )
-                exports.append(
-                    ExportResult(exporter=exporter.name, detail=f"failed: {exc}")
-                )
+        if self.auto_export and self.exporters:
+            exports = _run_exporters(item, self.exporters, self._progress)
 
-        self.store.record_archived(item)
         log.info("%s: %r", action.value, item.title)
         self._progress(f"{action.value:8} {item.title}")
         return ItemOutcome(item, action, url=item.url, exports=exports)
@@ -148,11 +194,10 @@ class Pipeline:
     def _decide(self, item: ArchiveItem, exists: bool) -> Optional[Action]:
         """Return the action to take, or None to skip, per duplicate policy.
 
-        ``exists`` is True when the output is already present on disk.
+        ``exists`` is True when the item is already archived in the DB.
         """
         if not exists:
             return Action.ARCHIVED
-        # Output already exists → it's a duplicate.
         policy = self.config.archive.on_duplicate
         if policy == "update":
             return Action.UPDATED

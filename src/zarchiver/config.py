@@ -93,8 +93,12 @@ class HtmlConfig:
 
 @dataclass
 class ArchiveConfig:
-    # State/dedup database location.
+    # State/dedup database location (also the system of record for content).
     db_path: str = "zarchiver.db"
+    # Root directory for DB-managed image assets; one subdir per item key.
+    assets_root: str = "archive/assets"
+    # Which exporters to run automatically after ingest (empty = ingest only).
+    auto_export: list[str] = field(default_factory=lambda: ["obsidian", "html"])
     # skip | update | ask
     on_duplicate: str = "skip"
     # Record comments on archived content.
@@ -140,6 +144,12 @@ class Config:
             self.obsidian.vault_path = v
         if v := env.get("ZARCHIVER_DB"):
             self.archive.db_path = v
+        if v := env.get("ZARCHIVER_ASSETS_ROOT"):
+            self.archive.assets_root = v
+        if v := env.get("ZARCHIVER_AUTO_EXPORT"):
+            self.archive.auto_export = [
+                p.strip() for p in v.split(",") if p.strip()
+            ]
         if (v := env.get("ZARCHIVER_HEADLESS")) is not None:
             self.browser.headless = v.strip().lower() in ("1", "true", "yes")
 

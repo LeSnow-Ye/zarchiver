@@ -57,7 +57,12 @@ credentials, then press Enter in the terminal. The session is written to
 
 ## `archive URL`
 
-The one command for everything. The kind of URL is auto-detected:
+Ingest content into the local database — the system of record. Archiving fetches
+the content and its comments, downloads images once into `archive.assets_root`
+(one subdirectory per item), runs AI summarization, and stores everything in the
+DB. It then renders the exporters listed in `archive.auto_export` (Obsidian +
+HTML by default) — or skip that with `--no-export` and run [`export`](#export)
+later. The kind of URL is auto-detected:
 
 - **Single** answer, article, or pin (想法) → archived directly.
 - **Batch** — a collection (收藏夹), column (专栏), or question → every item is
@@ -85,6 +90,8 @@ Options:
 - `--subdir NAME` — force output into this subdirectory instead of the
   batch-named default. Use `--subdir ''` to write directly into the base folder
   with no subdirectory.
+- `--no-export` — ingest into the DB (with images + AI) but don't render any
+  exporter; useful for bulk-collecting, then exporting in one pass later.
 
 For batch URLs, zarchiver loads all entries — columns (专栏) and collections
 (收藏夹) via their JSON list APIs, questions by scrolling — then archives each
@@ -122,6 +129,36 @@ blockquote list in markdown, and styled, nested blocks in HTML. Each comment
 shows its author, date, and like count. Comments are not part of an item's
 content hash, so they don't affect duplicate detection.
 
+## `export`
+
+Render already-archived items from the database — **fully offline**. It reads
+content, comments, and the recorded image asset map from the DB and writes
+Obsidian / HTML, rewriting `<img>` links to the locally stored images. No
+network access: only items already ingested by `archive` are exported. This lets
+you re-render after changing templates or config, or export formats you skipped
+at archive time, without re-fetching anything.
+
+```bash
+uv run zarchiver export                       # all items, all enabled exporters
+uv run zarchiver export -f obsidian           # only the Obsidian exporter
+uv run zarchiver export --type answer -n 50   # 50 most-recent answers
+uv run zarchiver export --key zhihu:article:35562420   # one specific item
+```
+
+Options:
+- `--format/-f obsidian|html` — pick exporter(s); repeatable. Defaults to all
+  enabled in config.
+- `--type answer|article|pin` — filter by content type.
+- `--key platform:type:id` — export a single item by its key.
+- `--subdir NAME` — force output into this subdirectory.
+- `--skip-existing` — skip items whose output files already exist (default is to
+  overwrite, since export is a deterministic function of the DB).
+- `--limit/-n N` — cap how many items to export (0 = all).
+
+Images missing from an item's asset map (e.g. a download that failed at ingest)
+keep their original remote URL rather than triggering a fetch — export never
+touches the network.
+
 ## `status`
 
 Show how many items are archived and the most recent ones.
@@ -133,7 +170,10 @@ uv run zarchiver status -n 30
 
 ## Output
 
-For each item zarchiver writes:
+Archiving stores everything in the database (`archive.db_path`): the content,
+threaded comments, AI summary/tags/category, engagement metrics, and a map of
+each image to its local copy under `archive.assets_root`. Exporters then render
+from the DB. For each item:
 
 - **Markdown** into `<vault_path>/<folder>/` (or a batch subdirectory) with YAML
   frontmatter (title, author, URL, dates, metrics, merged topic + AI tags, AI
@@ -141,26 +181,27 @@ For each item zarchiver writes:
   threaded `## 评论` section when comments are recorded.
 - **HTML** into `<html.output_path>/` — a styled, self-contained page including a
   comments section.
-- **Images** downloaded into the assets folders, with links rewritten to local
-  relative paths.
+- **Images** are downloaded once at ingest into `<assets_root>/<item-key>/`;
+  exporters copy the ones each item references into their own `assets/` folder
+  (or inline them as base64 for HTML when `embed_images = true`) and rewrite the
+  links to local relative paths.
 
 Open the vault folder in Obsidian (point Obsidian at `<vault_path>`) and the
 notes appear with working images and tags.
 
 ## Duplicate handling
 
-An item is considered a duplicate when its output **already exists on disk** —
-that is, when every enabled exporter's target file is already present. (If only
-some outputs exist — say you enabled HTML after a markdown-only run — the missing
-ones are still written.) On a duplicate, the `on_duplicate` policy decides:
+An item is a duplicate when it's **already in the database** with the same
+content hash. On a duplicate, the `on_duplicate` policy decides:
 
-- `skip` (default) — leave the existing files untouched.
-- `update` — re-fetch and re-export, overwriting the previous output.
+- `skip` (default) — leave the stored item and its exports untouched.
+- `update` — re-fetch, re-ingest, and re-export, overwriting previous output.
 - `ask` — prompt per item.
 
-Because detection is path-based, deleting an archived file makes that item
-archive again on the next run, and pointing a run at a fresh output directory
-re-archives everything regardless of past runs.
+Because detection is content-hash based in the DB (not path based), deleting an
+exported file doesn't cause a re-fetch — run `export` to regenerate it from the
+DB. When an item's content actually changes, its hash changes and `update`
+re-ingests it.
 
-AI summaries are still cached by content hash (in `archive.db_path`), so even
-when you re-archive, unchanged content is never re-sent to the LLM.
+AI summaries are also cached by content hash (in `archive.db_path`), so even
+when you re-archive with `update`, unchanged content is never re-sent to the LLM.
