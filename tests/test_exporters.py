@@ -167,6 +167,43 @@ def test_obsidian_export_keeps_remote_when_not_in_map(tmp_path):
     assert "https://pic1.zhimg.com/x_hd.jpg" in text
 
 
+def test_obsidian_escapes_ref_marker_brackets(tmp_path):
+    cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=False)
+    item = _sample_item()
+    item.content_html = (
+        '<p>正文<a class="ref-marker" href="#ref-1">[1]</a></p>'
+        '<h2>参考</h2><ol><li id="ref-1">出处</li></ol>'
+    )
+    body = (
+        ObsidianExporter(cfg)
+        .export(item)
+        .path.read_text(encoding="utf-8")
+        .split("---\n", 2)[2]
+    )
+
+    assert "\\[1\\]" in body
+    assert "[[1]](#ref-1)" not in body
+    assert "(#ref-1)" not in body
+
+
+def test_obsidian_escapes_literal_bracket_emoji_text(tmp_path):
+    cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=False)
+    item = _sample_item()
+    item.content_html = (
+        '<p>[doge] [思考] '
+        '<a href="https://example.com">普通链接</a></p>'
+    )
+    body = (
+        ObsidianExporter(cfg)
+        .export(item)
+        .path.read_text(encoding="utf-8")
+        .split("---\n", 2)[2]
+    )
+
+    assert "\\[doge\\] \\[思考\\]" in body
+    assert "[普通链接](https://example.com)" in body
+
+
 # ---------------------------------------------------------------------- #
 # Formulas
 # ---------------------------------------------------------------------- #
@@ -509,7 +546,6 @@ def test_obsidian_video_link_when_remote(tmp_path):
     # Remote video survives as a link rather than being dropped by markdownify.
     assert "https://v/clip.mp4" in body
     assert "🎬" in body
-
 
 
 

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 from markdownify import markdownify as md_convert
 
 from zarchiver.config import ObsidianConfig
@@ -133,6 +133,7 @@ class ObsidianExporter(Exporter):
 
         # markdownify drops <video>; convert each to an Obsidian embed/link first
         # so videos survive into the note.
+        body_html = _escape_obsidian_bracket_text(body_html)
         body_html = _videos_to_embeds(body_html)
 
         body_md = md_convert(body_html, heading_style="ATX", bullets="-")
@@ -258,6 +259,42 @@ def _tidy_markdown(md: str) -> str:
     """Collapse excessive blank lines markdownify can leave behind."""
     md = re.sub(r"\n{3,}", "\n\n", md)
     return md.strip()
+
+
+_UNESCAPED_OBSIDIAN_BRACKET = re.compile(r"(?<!\\)([\[\]])")
+
+
+def _escape_obsidian_brackets(text: str) -> str:
+    """Escape literal brackets so Obsidian won't treat them as wiki links."""
+    return _UNESCAPED_OBSIDIAN_BRACKET.sub(r"\\\1", text)
+
+
+def _escape_obsidian_bracket_text(html: str) -> str:
+    """Escape literal brackets in HTML text before markdownify sees them.
+
+    Obsidian treats ``[x]``-style text aggressively enough that Zhihu emoji
+    labels and reference markers can turn into broken wiki-link-like markdown.
+    Keep real markdown constructs generated later, such as video ``![[...]]``
+    embeds, untouched by doing this before those replacements.
+    """
+    if "[" not in html and "]" not in html and "ref-marker" not in html:
+        return html
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    for anchor in soup.select("a.ref-marker"):
+        anchor.replace_with(soup.new_string(_escape_obsidian_brackets(anchor.get_text())))
+
+    for node in soup.find_all(string=True):
+        if not isinstance(node, NavigableString):
+            continue
+        if "[" not in node and "]" not in node:
+            continue
+        if node.parent and node.parent.name in {"code", "pre", "script", "style"}:
+            continue
+        node.replace_with(soup.new_string(_escape_obsidian_brackets(str(node))))
+
+    return str(soup)
 
 
 def _videos_to_embeds(html: str) -> str:
