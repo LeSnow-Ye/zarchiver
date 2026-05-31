@@ -19,8 +19,9 @@ class FakeProvider(LLMProvider):
         self.reply = reply
         self.calls = 0
 
-    def complete(self, system, user):
+    def complete(self, system, user, *, json_mode=False):
         self.calls += 1
+        self.last_json_mode = json_mode
         return self.reply
 
 
@@ -61,6 +62,27 @@ def test_summarize_parses_result():
     assert r.tags == ["python", "学习"]
     assert r.category == "编程"
     assert r.model == AIConfig().model
+
+
+def test_summarize_requests_json_mode():
+    p = FakeProvider('{"summary":"s","tags":["a"],"category":"c"}')
+    s = Summarizer(AIConfig(api_key="x"), p)
+    s.summarize(_item(), use_cache=False)
+    assert p.last_json_mode is True
+
+
+def test_prompt_includes_obsidian_tag_rules():
+    s = Summarizer(AIConfig(api_key="x", language="zh"), FakeProvider("{}"))
+    _system, instruction = s._prompts("标题", "正文")
+    # ZH variant references the Obsidian spec and its key constraints.
+    assert "Obsidian" in instruction
+    assert "斜杠" in instruction  # nested tags
+    assert "纯数字" in instruction  # no numbers-only tags
+    # English variant carries the English rules, including kebab-case.
+    s_en = Summarizer(AIConfig(api_key="x", language="en"), FakeProvider("{}"))
+    _sys_en, instr_en = s_en._prompts("Title", "Body")
+    assert "Obsidian" in instr_en and "kebab-case" in instr_en
+    assert "nested tags" in instr_en
 
 
 def test_summarize_tags_as_string():

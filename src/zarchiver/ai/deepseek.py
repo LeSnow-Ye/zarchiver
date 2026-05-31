@@ -29,7 +29,7 @@ class DeepSeekProvider(LLMProvider):
                 "DeepSeek API key missing. Set DEEPSEEK_API_KEY or ai.api_key."
             )
 
-    def complete(self, system: str, user: str) -> str:
+    def complete(self, system: str, user: str, *, json_mode: bool = False) -> str:
         url = self.config.base_url.rstrip("/") + "/chat/completions"
         payload = {
             "model": self.config.model,
@@ -41,6 +41,9 @@ class DeepSeekProvider(LLMProvider):
             "temperature": self.config.temperature,
             "stream": False,
         }
+        if json_mode:
+            # DeepSeek is OpenAI-compatible: constrain output to a JSON object.
+            payload["response_format"] = {"type": "json_object"}
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
