@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Optional
 
 from bs4 import BeautifulSoup
@@ -104,12 +105,16 @@ class Summarizer:
             "calling %s for %r (%d chars in)",
             self.config.model, item.title, len(body),
         )
+        
+        start = time.monotonic()
+        
         reply = self.provider.complete(system, instruction, json_mode=True)
         result = self._parse(reply)
         result.model = self.config.model
-        log.debug(
-            "AI result for %r: category=%r, %d tags",
-            item.title, result.category, len(result.tags),
+        log.info(
+            "summarized in %0.2f seconds: %d chars in, category=%r, %d tags",
+            time.monotonic() - start,
+            len(body), result.category, len(result.tags),
         )
 
         if self.store is not None and not result.is_empty():
