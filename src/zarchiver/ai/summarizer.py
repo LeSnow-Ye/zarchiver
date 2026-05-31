@@ -126,7 +126,7 @@ class Summarizer:
         text = BeautifulSoup(html or "", "html.parser").get_text("\n", strip=True)
         text = re.sub(r"\n{3,}", "\n\n", text)
         limit = self.config.max_input_chars
-        if len(text) > limit:
+        if limit > 0 and len(text) > limit:
             text = text[:limit] + "\n…（内容已截断）"
         return text
 

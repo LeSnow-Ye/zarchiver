@@ -96,7 +96,7 @@ it (see [usage](usage.md)).
 | `model` | `deepseek-v4-flash` | Also available: `deepseek-v4-pro`. |
 | `max_tokens` | `1200` | Generous: the flash model is a *reasoning* model and spends tokens before answering. |
 | `temperature` | `0.3` | Lower = more consistent tagging. |
-| `max_input_chars` | `12000` | Body is truncated to this before sending. |
+| `max_input_chars` | `12000` | Body is truncated to this before sending. Set to 0 to disable truncation |
 | `timeout_s` | `120` | Request timeout. |
 | `language` | `zh` | `zh` or `en` for the summary/tags. |
 
