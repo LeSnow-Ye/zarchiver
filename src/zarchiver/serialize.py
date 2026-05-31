@@ -206,6 +206,7 @@ def row_from_item(item: ArchiveItem) -> dict:
         "excerpt": item.excerpt,
         "comments_json": _json_dumps([comment_to_dict(c) for c in item.comments]),
         "asset_map_json": _json_dumps(dict(item.asset_map)),
+        "asset_issues_json": _json_dumps(dict(item.asset_issues)),
         "ai_json": _json_dumps(ai_to_dict(item.ai)),
         "raw_json": _json_dumps(item.raw),
         "content_hash": item.content_hash(),
@@ -227,6 +228,7 @@ def item_from_row(row: Any) -> ArchiveItem:
 
     comments_data = _json_loads(col("comments_json")) or []
     asset_map = _json_loads(col("asset_map_json")) or {}
+    asset_issues = _json_loads(col("asset_issues_json")) or {}
     topics = _json_loads(col("topics_json")) or []
     raw = _json_loads(col("raw_json")) or {}
 
@@ -254,6 +256,11 @@ def item_from_row(row: Any) -> ArchiveItem:
             comment_from_dict(c) for c in comments_data if isinstance(c, dict)
         ],
         asset_map=asset_map if isinstance(asset_map, dict) else {},
+        asset_issues=(
+            {str(k): str(v) for k, v in asset_issues.items()}
+            if isinstance(asset_issues, dict)
+            else {}
+        ),
         ai=ai_from_dict(_json_loads(col("ai_json"))),
         raw=raw if isinstance(raw, dict) else {},
     )

@@ -14,6 +14,7 @@ the commands override the most common settings.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from typing import Optional
 
 import typer
@@ -184,8 +185,11 @@ def _build_pipeline(
 
 def _report(outcomes: list[ItemOutcome]) -> None:
     counts = {a: 0 for a in Action}
+    asset_issues: Counter[str] = Counter()
     for o in outcomes:
         counts[o.action] += 1
+        if o.item is not None:
+            asset_issues.update(o.item.asset_issues.values())
     for o in outcomes:
         if o.action == Action.FAILED:
             log.error("FAILED %s: %s", o.url, o.detail)
@@ -198,7 +202,23 @@ def _report(outcomes: list[ItemOutcome]) -> None:
         parts.append(f"[green]{counts[Action.EXPORTED]} exported[/green]")
     if counts[Action.FAILED]:
         parts.append(f"[red]{counts[Action.FAILED]} failed[/red]")
+    if asset_issues["too_large"]:
+        parts.append(
+            f"[yellow dim]{asset_issues['too_large']} assets too large[/yellow dim]"
+        )
+    if asset_issues["failed"]:
+        parts.append(f"[red]{asset_issues['failed']} assets failed[/red]")
     out.print("Done: " + ", ".join(parts))
+
+
+def _asset_issue_label(issues: dict[str, str]) -> str:
+    counts = Counter(issues.values())
+    parts: list[str] = []
+    if counts["too_large"]:
+        parts.append(f"{counts['too_large']}✕large")
+    if counts["failed"]:
+        parts.append(f"{counts['failed']}✕fail")
+    return " ".join(parts)
 
 
 # ---------------------------------------------------------------------- #
@@ -393,9 +413,17 @@ def status(
             table = Table(show_header=True, header_style="bold")
             table.add_column("Type")
             table.add_column("Title", overflow="fold")
+            table.add_column("Assets")
             table.add_column("Updated")
             for r in rows:
-                table.add_row(r["content_type"], r["title"] or "", r["updated_at"][:19])
+                item = store.load_item(r["key"])
+                assets = _asset_issue_label(item.asset_issues) if item else ""
+                table.add_row(
+                    r["content_type"],
+                    r["title"] or "",
+                    assets,
+                    r["updated_at"][:19],
+                )
             out.print(table)
     finally:
         store.close()

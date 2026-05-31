@@ -16,6 +16,8 @@ import hashlib
 import logging
 import mimetypes
 import shutil
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -23,9 +25,28 @@ from bs4 import BeautifulSoup
 
 log = logging.getLogger(__name__)
 
-# A function that fetches bytes for a URL (e.g. wrapping httpx). Returns None on
-# failure so a single bad image never aborts an export.
-Fetcher = Callable[[str], Optional[bytes]]
+class FetchStatus(str, Enum):
+    OK = "ok"
+    TOO_LARGE = "too_large"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class FetchResult:
+    status: FetchStatus
+    data: Optional[bytes] = None
+
+
+# A function that fetches bytes for a URL (e.g. wrapping httpx). It classifies
+# failures so deterministic size skips are not treated as download errors.
+Fetcher = Callable[[str], FetchResult]
+
+
+@dataclass(slots=True)
+class DownloadOutcome:
+    saved: dict[str, str]
+    oversized: list[str]
+    failed: list[str]
 
 _EXT_BY_MIME = {
     "image/jpeg": ".jpg",
@@ -101,42 +122,56 @@ def download_images(
     pairs: list[tuple[str, str]],
     dest_dir: Path,
     fetch: Fetcher,
-) -> dict[str, str]:
+) -> DownloadOutcome:
     """Download each (url, filename) into ``dest_dir``.
 
-    Returns a map of url -> final filename (extension may be corrected from the
-    downloaded content type). Failures are skipped silently.
+    Returns downloaded/cached assets plus classified misses. Saved filenames may
+    have a corrected extension from the downloaded content type.
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
-    result: dict[str, str] = {}
-    cached = downloaded = failed = 0
+    saved: dict[str, str] = {}
+    oversized: list[str] = []
+    failed_urls: list[str] = []
+    cached = downloaded = 0
     for url, fname in pairs:
         target = dest_dir / fname
         if target.exists() and target.stat().st_size > 0:
-            result[url] = fname
+            saved[url] = fname
             cached += 1
             continue
-        data = fetch(url)
-        if not data:
-            failed += 1
+
+        fetched = fetch(url)
+        if fetched.status == FetchStatus.TOO_LARGE:
+            oversized.append(url)
+            log.debug("image too large, keeping remote URL: %s", url)
+            continue
+        if fetched.status != FetchStatus.OK or not fetched.data:
+            failed_urls.append(url)
             log.debug("image download failed: %s", url)
             continue
+
+        data = fetched.data
         # Fix missing extension from content if needed.
         if not Path(fname).suffix:
             ext = _sniff_ext(data) or ".jpg"
             fname = fname + ext
             target = dest_dir / fname
         target.write_bytes(data)
-        result[url] = fname
+        saved[url] = fname
         downloaded += 1
     if pairs:
-        log.debug(
-            "images for %s: %d downloaded, %d cached, %d failed",
-            dest_dir, downloaded, cached, failed,
+        failed = len(failed_urls)
+        too_large = len(oversized)
+        log.info(
+            "images for %s: %d downloaded, %d cached, %d too-large "
+            "(kept remote), %d failed",
+            dest_dir, downloaded, cached, too_large, failed,
         )
+        if too_large:
+            log.info("%d image(s) too large in %s; kept remote URLs", too_large, dest_dir)
         if failed:
             log.warning("%d image(s) failed to download into %s", failed, dest_dir)
-    return result
+    return DownloadOutcome(saved=saved, oversized=oversized, failed=failed_urls)
 
 
 def _sniff_ext(data: bytes) -> Optional[str]:
@@ -335,4 +370,3 @@ def inline_from_asset_map(
 def _guess_mime_from_name(name: str) -> str:
     mime, _ = mimetypes.guess_type(name)
     return mime or "image/jpeg"
-

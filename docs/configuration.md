@@ -25,6 +25,7 @@ Values are resolved in this order, later winning:
 | `ZARCHIVER_AUTO_EXPORT` | `archive.auto_export` | Comma-separated exporters to auto-run (e.g. `obsidian,html`). |
 | `ZARCHIVER_VIDEO_QUALITY` | `archive.video_quality` | Preferred video quality (`FHD`/`HD`/`SD`/`LD`). |
 | `ZARCHIVER_MAX_ASSET_MB` | `archive.max_asset_mb` | Max size (MB) per downloaded asset; `0` disables the limit. |
+| `ZARCHIVER_MAX_ASSET_RETRIES` | `archive.max_asset_retries` | Retries after the first attempt for transient asset download failures; `0` disables retries. |
 | `ZARCHIVER_PREFER_API_CONTENT` | `archive.prefer_api_content` | `1`/`true`/`0`/`false`; build batch items from the API instead of opening pages. |
 | `ZARCHIVER_HEADLESS` | `browser.headless` | `1`/`true` forces headless. |
 
@@ -47,6 +48,7 @@ it (see [usage](usage.md)).
 | `download_videos` | `true` | Download embedded videos as MP4 (play offline). Off → poster + link. Disable per run with `--no-videos`. |
 | `video_quality` | `FHD` | Preferred quality (`FHD`/`HD`/`SD`/`LD`); falls back to nearest. Override per run with `--video-quality`. |
 | `max_asset_mb` | `20.0` | Max size (MB) for a single downloaded asset (image/video). Larger assets aren't stored locally; the content keeps the original remote link. `0` disables the limit. |
+| `max_asset_retries` | `2` | Retries after the first attempt for transient asset failures: timeouts, transport errors, HTTP 429, and HTTP 5xx. Permanent 4xx failures and over-size skips are never retried. `0` = single attempt. |
 | `prefer_api_content` | `true` | In batch archives, build items from the listing API's JSON (full body included) instead of opening each page — faster, and dedup happens up front. Pages are still opened as a fallback when an API entry lacks content. Set `false` to force opening every page. |
 
 ### `[browser]`

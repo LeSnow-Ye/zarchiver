@@ -262,11 +262,13 @@ def _fetcher_with_responses(monkeypatch, cfg, handler):
         return real_client(*args, **kwargs)
 
     monkeypatch.setattr(P.httpx, "Client", fake_client)
-    return P.make_image_fetcher(cfg)
+    return P.make_image_fetcher(cfg, sleep=lambda _: None)
 
 
 def test_fetcher_downloads_under_limit(monkeypatch):
     import httpx
+
+    from zarchiver.exporters.assets import FetchStatus
 
     cfg = Config()
     cfg.archive.max_asset_mb = 1.0  # 1 MB
@@ -276,11 +278,15 @@ def test_fetcher_downloads_under_limit(monkeypatch):
         return httpx.Response(200, content=body)
 
     fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
-    assert fetch("https://pic.zhimg.com/a.jpg") == body
+    result = fetch("https://pic.zhimg.com/a.jpg")
+    assert result.status == FetchStatus.OK
+    assert result.data == body
 
 
 def test_fetcher_rejects_via_content_length(monkeypatch):
     import httpx
+
+    from zarchiver.exporters.assets import FetchStatus
 
     cfg = Config()
     cfg.archive.max_asset_mb = 1.0
@@ -291,11 +297,14 @@ def test_fetcher_rejects_via_content_length(monkeypatch):
         return httpx.Response(200, content=big)
 
     fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
-    assert fetch("https://vzuu.com/big.mp4") is None  # over the 1 MB cap
+    result = fetch("https://vzuu.com/big.mp4")
+    assert result.status == FetchStatus.TOO_LARGE  # over the 1 MB cap
 
 
 def test_fetcher_rejects_while_streaming_without_content_length(monkeypatch):
     import httpx
+
+    from zarchiver.exporters.assets import FetchStatus
 
     cfg = Config()
     cfg.archive.max_asset_mb = 1.0
@@ -309,11 +318,14 @@ def test_fetcher_rejects_while_streaming_without_content_length(monkeypatch):
         return httpx.Response(200, content=gen())
 
     fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
-    assert fetch("https://vzuu.com/chunked.mp4") is None
+    result = fetch("https://vzuu.com/chunked.mp4")
+    assert result.status == FetchStatus.TOO_LARGE
 
 
 def test_fetcher_zero_limit_disables_cap(monkeypatch):
     import httpx
+
+    from zarchiver.exporters.assets import FetchStatus
 
     cfg = Config()
     cfg.archive.max_asset_mb = 0  # disabled → archive everything
@@ -323,4 +335,133 @@ def test_fetcher_zero_limit_disables_cap(monkeypatch):
         return httpx.Response(200, content=big)
 
     fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
-    assert fetch("https://vzuu.com/huge.mp4") == big
+    result = fetch("https://vzuu.com/huge.mp4")
+    assert result.status == FetchStatus.OK
+    assert result.data == big
+
+
+def test_fetcher_retries_transient_status_then_succeeds(monkeypatch):
+    import httpx
+
+    from zarchiver.exporters.assets import FetchStatus
+
+    cfg = Config()
+    cfg.archive.max_asset_retries = 2
+    attempts = 0
+
+    def handler(request):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            return httpx.Response(503)
+        return httpx.Response(200, content=b"ok")
+
+    fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
+    result = fetch("https://pic.zhimg.com/retry.jpg")
+    assert result.status == FetchStatus.OK
+    assert result.data == b"ok"
+    assert attempts == 3
+
+
+def test_fetcher_retries_429_then_succeeds(monkeypatch):
+    import httpx
+
+    from zarchiver.exporters.assets import FetchStatus
+
+    cfg = Config()
+    cfg.archive.max_asset_retries = 1
+    attempts = 0
+
+    def handler(request):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(429)
+        return httpx.Response(200, content=b"ok")
+
+    fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
+    result = fetch("https://pic.zhimg.com/rate-limited.jpg")
+    assert result.status == FetchStatus.OK
+    assert attempts == 2
+
+
+def test_fetcher_retries_timeout_then_succeeds(monkeypatch):
+    import httpx
+
+    from zarchiver.exporters.assets import FetchStatus
+
+    cfg = Config()
+    cfg.archive.max_asset_retries = 1
+    attempts = 0
+
+    def handler(request):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, content=b"ok")
+
+    fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
+    result = fetch("https://pic.zhimg.com/slow.jpg")
+    assert result.status == FetchStatus.OK
+    assert attempts == 2
+
+
+def test_fetcher_transient_exhausts_retries(monkeypatch):
+    import httpx
+
+    from zarchiver.exporters.assets import FetchStatus
+
+    cfg = Config()
+    cfg.archive.max_asset_retries = 2
+    attempts = 0
+
+    def handler(request):
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(503)
+
+    fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
+    result = fetch("https://pic.zhimg.com/down.jpg")
+    assert result.status == FetchStatus.FAILED
+    assert attempts == 3
+
+
+def test_fetcher_permanent_404_no_retry(monkeypatch):
+    import httpx
+
+    from zarchiver.exporters.assets import FetchStatus
+
+    cfg = Config()
+    cfg.archive.max_asset_retries = 5
+    attempts = 0
+
+    def handler(request):
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(404)
+
+    fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
+    result = fetch("https://pic.zhimg.com/missing.jpg")
+    assert result.status == FetchStatus.FAILED
+    assert attempts == 1
+
+
+def test_fetcher_zero_retries_single_attempt(monkeypatch):
+    import httpx
+
+    from zarchiver.exporters.assets import FetchStatus
+
+    cfg = Config()
+    cfg.archive.max_asset_retries = 0
+    attempts = 0
+
+    def handler(request):
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(503)
+
+    fetch = _fetcher_with_responses(monkeypatch, cfg, handler)
+    result = fetch("https://pic.zhimg.com/down.jpg")
+    assert result.status == FetchStatus.FAILED
+    assert attempts == 1

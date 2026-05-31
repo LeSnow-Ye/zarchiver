@@ -1,6 +1,7 @@
 """Store tests: item save/load round-trip, dedup status, iteration (offline)."""
 
 import tempfile
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -44,6 +45,10 @@ def test_save_then_load_round_trip(store):
     item.topics = ["a", "b"]
     item.comments = [Comment(id="c1", content_html="<p>hi</p>")]
     item.asset_map = {"https://pic.zhimg.com/x.jpg": "zhihu_article_1/x.jpg"}
+    item.asset_issues = {
+        "https://pic.zhimg.com/big.gif": "too_large",
+        "https://pic.zhimg.com/missing.jpg": "failed",
+    }
     item.ai = AIResult(summary="s", tags=["t"], category="c", model="m")
     item.raw = {"k": "v"}
     store.save_item(item)
@@ -55,6 +60,7 @@ def test_save_then_load_round_trip(store):
     assert loaded.topics == ["a", "b"]
     assert loaded.comments[0].id == "c1"
     assert loaded.asset_map == item.asset_map
+    assert loaded.asset_issues == item.asset_issues
     assert loaded.ai.summary == "s"
     assert loaded.raw == {"k": "v"}
     assert loaded.content_hash() == item.content_hash()
@@ -123,3 +129,61 @@ def test_batch_round_trip(store):
     loaded = store.load_item(item.key)
     assert loaded.batch.kind == BatchKind.COLLECTION
     assert loaded.batch.id == "9"
+
+
+def test_existing_v1_db_migrates_asset_issues_column(tmp_path):
+    db = tmp_path / "v1.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE items (
+            key            TEXT PRIMARY KEY,
+            platform       TEXT NOT NULL,
+            content_type   TEXT NOT NULL,
+            source_id      TEXT NOT NULL,
+            url            TEXT,
+            title          TEXT,
+            content_html   TEXT,
+            author_json    TEXT,
+            created        TEXT,
+            updated        TEXT,
+            question_title TEXT,
+            question_url   TEXT,
+            title_image    TEXT,
+            column_title   TEXT,
+            column_url     TEXT,
+            batch_json     TEXT,
+            voteup_count   INTEGER,
+            comment_count  INTEGER,
+            topics_json    TEXT,
+            excerpt        TEXT,
+            comments_json  TEXT,
+            asset_map_json TEXT,
+            ai_json        TEXT,
+            raw_json       TEXT,
+            content_hash   TEXT NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            archived_at    TEXT NOT NULL,
+            updated_at     TEXT NOT NULL
+        );
+        CREATE TABLE ai_cache (
+            content_hash  TEXT PRIMARY KEY,
+            model         TEXT,
+            summary       TEXT,
+            tags_json     TEXT,
+            category      TEXT,
+            created_at    TEXT NOT NULL
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    store = StateStore(db)
+    try:
+        item = _item()
+        item.asset_issues = {"https://pic.zhimg.com/missing.jpg": "failed"}
+        store.save_item(item)
+        assert store.load_item(item.key).asset_issues == item.asset_issues
+    finally:
+        store.close()

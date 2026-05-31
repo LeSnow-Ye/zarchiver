@@ -3,10 +3,13 @@
 from pathlib import Path
 
 from zarchiver.exporters.assets import (
+    FetchResult,
+    FetchStatus,
     _sniff_ext,
     collect_image_urls,
     collect_media_urls,
     copy_assets,
+    download_images,
     filename_for,
     inline_from_asset_map,
     rewrite_with_asset_map,
@@ -153,3 +156,46 @@ def test_sniff_ext_mp4():
 
 def test_sniff_ext_webm():
     assert _sniff_ext(b"\x1aE\xdf\xa3rest") == ".webm"
+
+
+def test_download_images_classifies_results(tmp_path):
+    results = {
+        "https://x/ok": FetchResult(FetchStatus.OK, PNG),
+        "https://x/too-large": FetchResult(FetchStatus.TOO_LARGE),
+        "https://x/failed": FetchResult(FetchStatus.FAILED),
+    }
+
+    def fetch(url):
+        return results[url]
+
+    outcome = download_images(
+        [
+            ("https://x/ok", "ok"),
+            ("https://x/too-large", "too-large.jpg"),
+            ("https://x/failed", "failed.jpg"),
+        ],
+        tmp_path,
+        fetch,
+    )
+
+    assert outcome.saved == {"https://x/ok": "ok.png"}
+    assert outcome.oversized == ["https://x/too-large"]
+    assert outcome.failed == ["https://x/failed"]
+    assert (tmp_path / "ok.png").is_file()
+
+
+def test_download_images_cached_files_count_as_saved(tmp_path):
+    (tmp_path / "cached.jpg").write_bytes(PNG)
+
+    def fetch(url):
+        raise AssertionError("cached asset should not be fetched")
+
+    outcome = download_images(
+        [("https://x/cached.jpg", "cached.jpg")],
+        tmp_path,
+        fetch,
+    )
+
+    assert outcome.saved == {"https://x/cached.jpg": "cached.jpg"}
+    assert outcome.oversized == []
+    assert outcome.failed == []

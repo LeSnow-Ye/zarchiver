@@ -61,6 +61,10 @@ def _full_item() -> ArchiveItem:
         )
     ]
     item.asset_map = {"https://pic1.zhimg.com/a.jpg": "zhihu_answer_42/abc.jpg"}
+    item.asset_issues = {
+        "https://pic1.zhimg.com/big.gif": "too_large",
+        "https://pic1.zhimg.com/missing.jpg": "failed",
+    }
     item.ai = AIResult(summary="摘要", tags=["t1", "t2"], category="分类", model="m")
     item.raw = {"nested": {"k": [1, 2, 3]}, "s": "v"}
     return item
@@ -142,6 +146,19 @@ def test_round_trip_asset_map():
     assert rebuilt.asset_map == item.asset_map
 
 
+def test_round_trip_asset_issues():
+    item = _full_item()
+    rebuilt = item_from_row(row_from_item(item))
+    assert rebuilt.asset_issues == item.asset_issues
+
+
+def test_missing_asset_issues_column_defaults_empty():
+    row = row_from_item(_full_item())
+    del row["asset_issues_json"]
+    rebuilt = item_from_row(row)
+    assert rebuilt.asset_issues == {}
+
+
 def test_round_trip_ai_result():
     item = _full_item()
     rebuilt = item_from_row(row_from_item(item))
@@ -165,6 +182,7 @@ def test_minimal_item_round_trip():
     assert rebuilt.batch is None
     assert rebuilt.comments == []
     assert rebuilt.asset_map == {}
+    assert rebuilt.asset_issues == {}
     assert rebuilt.ai.is_empty()
     assert rebuilt.raw == {}
     assert rebuilt.content_hash() == item.content_hash()

@@ -18,6 +18,7 @@ by the ``on_duplicate`` config policy against the DB, not the filesystem.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Iterable, Optional
@@ -25,6 +26,7 @@ from typing import Callable, Iterable, Optional
 import httpx
 
 from zarchiver.config import Config
+from zarchiver.exporters.assets import FetchResult, FetchStatus
 from zarchiver.exporters.base import Exporter, ExportResult
 from zarchiver.ingest import Ingestor
 from zarchiver.models import ArchiveItem
@@ -215,13 +217,17 @@ class Pipeline:
         return None
 
 
-def make_image_fetcher(config: Config) -> Callable[[str], Optional[bytes]]:
+def make_image_fetcher(
+    config: Config,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Callable[[str], FetchResult]:
     """Build an image fetcher that satisfies Zhihu's hotlink/referer checks.
 
-    Returns a function ``url -> bytes | None`` backed by a persistent
-    httpx.Client with a Zhihu referer and browser-like UA. Assets larger than
-    ``archive.max_asset_mb`` are refused (returns None) so the content keeps its
-    original remote link instead of storing an oversized file; the limit is
+    Returns a function ``url -> FetchResult`` backed by a persistent httpx.Client
+    with a Zhihu referer and browser-like UA. Assets larger than
+    ``archive.max_asset_mb`` are classified as too-large so the content keeps
+    its original remote link instead of storing an oversized file; the limit is
     enforced both via the ``Content-Length`` header and while streaming (in case
     the header is absent or lies). ``max_asset_mb = 0`` disables the limit.
     """
@@ -235,22 +241,32 @@ def make_image_fetcher(config: Config) -> Callable[[str], Optional[bytes]]:
         follow_redirects=True,
     )
     max_bytes = int(config.archive.max_asset_mb * 1024 * 1024)
+    max_retries = max(0, int(config.archive.max_asset_retries))
 
-    def fetch(url: str) -> Optional[bytes]:
+    def delay_for(retry_index: int) -> float:
+        return min(0.5 * (2 ** retry_index), 8.0)
+
+    def should_retry_status(status_code: int) -> bool:
+        return status_code == 429 or 500 <= status_code <= 599
+
+    def fetch_once(url: str) -> tuple[FetchResult, Optional[str]]:
         try:
             with client.stream("GET", url) as resp:
                 if resp.status_code != 200:
-                    return None
+                    reason = f"HTTP {resp.status_code}"
+                    if should_retry_status(resp.status_code):
+                        return FetchResult(FetchStatus.FAILED), reason
+                    return FetchResult(FetchStatus.FAILED), None
                 # Trust an advertised size to skip the download entirely.
                 if max_bytes:
                     declared = resp.headers.get("content-length")
                     if declared and declared.isdigit() and int(declared) > max_bytes:
                         log.info(
-                            "skipping asset over %.0f MB (%.1f MB): %s",
+                            "skipping asset over %.0f MB -> keeping remote link: %s",
                             config.archive.max_asset_mb,
-                            int(declared) / 1024 / 1024, url,
+                            url,
                         )
-                        return None
+                        return FetchResult(FetchStatus.TOO_LARGE), None
                 chunks: list[bytes] = []
                 size = 0
                 for chunk in resp.iter_bytes():
@@ -258,14 +274,35 @@ def make_image_fetcher(config: Config) -> Callable[[str], Optional[bytes]]:
                     # Guard against a missing/incorrect Content-Length.
                     if max_bytes and size > max_bytes:
                         log.info(
-                            "skipping asset exceeding %.0f MB while streaming: %s",
+                            "skipping asset over %.0f MB -> keeping remote link: %s",
                             config.archive.max_asset_mb, url,
                         )
-                        return None
+                        return FetchResult(FetchStatus.TOO_LARGE), None
                     chunks.append(chunk)
                 data = b"".join(chunks)
-                return data or None
+                if not data:
+                    return FetchResult(FetchStatus.FAILED), None
+                return FetchResult(FetchStatus.OK, data), None
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            return FetchResult(FetchStatus.FAILED), exc.__class__.__name__
         except httpx.HTTPError:
-            return None
+            return FetchResult(FetchStatus.FAILED), None
+
+    def fetch(url: str) -> FetchResult:
+        attempts = 1 + max_retries
+        for attempt in range(attempts):
+            result, retry_reason = fetch_once(url)
+            if result.status != FetchStatus.FAILED or retry_reason is None:
+                return result
+            if attempt >= max_retries:
+                log.warning("asset failed after %d attempts: %s", attempts, url)
+                return result
+            delay = delay_for(attempt)
+            log.debug(
+                "asset fetch failed (%s), retrying in %.1fs: %s",
+                retry_reason, delay, url,
+            )
+            sleep(delay)
+        return FetchResult(FetchStatus.FAILED)
 
     return fetch

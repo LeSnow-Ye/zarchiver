@@ -102,13 +102,19 @@ class Ingestor:
             urls.append(item.title_image)
 
         if not urls:
+            item.asset_map = {}
+            item.asset_issues = {}
             return
 
         dest = self.assets_root / safe_key(item.key)
         pairs = [(u, filename_for(u)) for u in urls]
-        saved = download_images(pairs, dest, self._fetch)  # {url: final_filename}
+        outcome = download_images(pairs, dest, self._fetch)
 
         prefix = safe_key(item.key)
         item.asset_map = {
-            url: f"{prefix}/{fname}" for url, fname in saved.items()
+            url: f"{prefix}/{fname}" for url, fname in outcome.saved.items()
         }
+        item.asset_issues = (
+            {url: "too_large" for url in outcome.oversized}
+            | {url: "failed" for url in outcome.failed}
+        )

@@ -13,6 +13,7 @@
 #   ZARCHIVER_AUTO_EXPORT -> archive.auto_export (comma-separated, e.g. "obsidian,html")
 #   ZARCHIVER_VIDEO_QUALITY -> archive.video_quality (FHD|HD|SD|LD)
 #   ZARCHIVER_MAX_ASSET_MB -> archive.max_asset_mb (number; 0 disables the limit)
+#   ZARCHIVER_MAX_ASSET_RETRIES -> archive.max_asset_retries (integer; 0 disables retries)
 #   ZARCHIVER_PREFER_API_CONTENT -> archive.prefer_api_content ("1"/"true"/"0"/"false")
 #   ZARCHIVER_HEADLESS    -> browser.headless ("1"/"true" to force headless)
 
@@ -44,6 +45,10 @@ video_quality = "FHD"
 # larger than this aren't stored locally — the content keeps the original
 # remote link instead. Set 0 to disable the limit and archive everything.
 max_asset_mb = 20.0
+# Retries after the first attempt for transient asset download failures:
+# timeouts, transport errors, HTTP 429, and HTTP 5xx. Permanent 4xx failures
+# and over-size skips are never retried. Set 0 for a single attempt.
+max_asset_retries = 2
 # In batch archives (collection/column/question), build each item directly from
 # the listing API's JSON (which already contains the full body) instead of
 # opening its page — much faster, and lets duplicate detection happen up front.

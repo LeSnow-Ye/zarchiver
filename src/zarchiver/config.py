@@ -115,6 +115,10 @@ class ArchiveConfig:
     # larger than this are not stored locally; the content keeps the original
     # remote link instead. 0 disables the limit (archive everything).
     max_asset_mb: float = 20.0
+    # Number of retries after the first attempt for transient asset-download
+    # failures: timeouts, transport errors, HTTP 429/5xx. Permanent failures
+    # (4xx) and over-size skips are never retried. 0 = a single attempt.
+    max_asset_retries: int = 2
     # In batch archives, build items directly from the listing API's JSON
     # (which carries the full content body) instead of opening each item's
     # page. Pages are still opened as a fallback when the API entry lacks
@@ -169,6 +173,11 @@ class Config:
         if v := env.get("ZARCHIVER_MAX_ASSET_MB"):
             try:
                 self.archive.max_asset_mb = max(0.0, float(v.strip()))
+            except ValueError:
+                pass  # ignore a malformed override, keep the configured value
+        if v := env.get("ZARCHIVER_MAX_ASSET_RETRIES"):
+            try:
+                self.archive.max_asset_retries = max(0, int(v.strip()))
             except ValueError:
                 pass  # ignore a malformed override, keep the configured value
         if (v := env.get("ZARCHIVER_PREFER_API_CONTENT")) is not None:

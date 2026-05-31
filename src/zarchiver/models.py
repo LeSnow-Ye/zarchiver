@@ -118,6 +118,8 @@ class ArchiveItem:
         asset_map: Maps a remote image URL to its local path (relative to the
             DB-managed assets root). Populated at ingest when images are
             downloaded; read by exporters to rewrite <img> offline.
+        asset_issues: Maps a remote asset URL to why it is not present in
+            asset_map: ``"too_large"`` or ``"failed"``.
         ai: Populated by the AI module after fetch.
         raw: Escape hatch holding the original parsed structure for debugging.
     """
@@ -143,6 +145,7 @@ class ArchiveItem:
     excerpt: str = ""
     comments: list[Comment] = field(default_factory=list)
     asset_map: dict[str, str] = field(default_factory=dict)
+    asset_issues: dict[str, str] = field(default_factory=dict)
     ai: AIResult = field(default_factory=AIResult)
     raw: dict = field(default_factory=dict)
 

@@ -13,7 +13,8 @@ The store is the single source of truth for archived content. It holds:
 
 Images are *not* stored in the DB: their bytes live on disk under an assets root
 (one directory per item key), and the item's ``asset_map`` (remote URL → local
-relative path) is persisted as JSON so exporters can rewrite ``<img>`` offline.
+relative path) plus ``asset_issues`` are persisted as JSON so exporters can
+rewrite ``<img>`` offline and reports can distinguish skipped/failed assets.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from typing import Iterator, Optional
 from zarchiver.models import AIResult, ArchiveItem
 from zarchiver.serialize import item_from_row, row_from_item
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
@@ -53,10 +54,11 @@ CREATE TABLE IF NOT EXISTS items (
     excerpt        TEXT,
     comments_json  TEXT,
     asset_map_json TEXT,
+    asset_issues_json TEXT,
     ai_json        TEXT,
     raw_json       TEXT,
     content_hash   TEXT NOT NULL,
-    schema_version INTEGER NOT NULL DEFAULT 1,
+    schema_version INTEGER NOT NULL DEFAULT 2,
     archived_at    TEXT NOT NULL,
     updated_at     TEXT NOT NULL
 );
@@ -80,7 +82,7 @@ _ITEM_COLUMNS = (
     "content_html", "author_json", "created", "updated", "question_title",
     "question_url", "title_image", "column_title", "column_url", "batch_json",
     "voteup_count", "comment_count", "topics_json", "excerpt", "comments_json",
-    "asset_map_json", "ai_json", "raw_json", "content_hash",
+    "asset_map_json", "asset_issues_json", "ai_json", "raw_json", "content_hash",
 )
 
 
@@ -98,7 +100,15 @@ class StateStore:
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        try:
+            self._conn.execute("ALTER TABLE items ADD COLUMN asset_issues_json TEXT")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
 
     def close(self) -> None:
         self._conn.close()
