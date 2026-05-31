@@ -40,6 +40,17 @@ class Source(ABC):
         item as it arrives rather than buffering the whole batch.
         """
 
+    def enrich(self, item: ArchiveItem) -> None:
+        """Fetch supplementary data for an item the pipeline will keep.
+
+        Called only once the pipeline has decided to archive or update an item
+        — never for skipped duplicates. This is where a source does extra,
+        potentially expensive work (e.g. crawling comments) that isn't needed
+        to identify the item or detect content changes. Optional: the default
+        does nothing. Must be best-effort (never raise) so enrichment can't
+        block archiving.
+        """
+
     # Sources that hold resources (a browser) can override these.
     def __enter__(self) -> "Source":
         return self

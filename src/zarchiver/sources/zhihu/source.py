@@ -56,7 +56,6 @@ class ZhihuSource(Source):
             )
         else:
             raise SourceError(f"unsupported or unrecognized Zhihu URL: {url}")
-        self._attach_comments(item)
         return item
 
     def fetch_batch(self, url: str) -> Iterator[ArchiveItem]:
@@ -142,8 +141,13 @@ class ZhihuSource(Source):
 
         return resolve
 
-    def _attach_comments(self, item: ArchiveItem) -> None:
-        """Fetch and attach comments for ``item`` per config (best-effort)."""
+    def enrich(self, item: ArchiveItem) -> None:
+        """Attach comments for an item the pipeline has decided to keep.
+
+        Called by the pipeline only for archived/updated items, so skipped
+        duplicates never trigger a comment crawl. Best-effort: a failed comment
+        fetch is logged and never blocks archiving.
+        """
         if not self.config.archive.comments:
             return
         resource_type = C.resource_type_for(item.content_type)
@@ -405,8 +409,9 @@ class ZhihuSource(Source):
         When ``prefer_api_content`` is on, each entry is built directly from its
         API JSON (full body included) — no page navigation. If that yields no
         usable content (empty body or unexpected shape), or the preference is
-        off, the item's page is fetched as a fallback. Comments are attached for
-        API-built items (the page path already attaches them in ``fetch``).
+        off, the item's page is fetched as a fallback. Comments are *not*
+        fetched here — the pipeline calls :meth:`enrich` once it decides to keep
+        an item, so skipped duplicates never trigger a comment crawl.
         """
         cap = self._max_items()
         prefer_api = self.config.archive.prefer_api_content
@@ -424,7 +429,6 @@ class ZhihuSource(Source):
                 log.info(
                     "item %d/%d from API: %s", count + 1, total, url
                 )
-                self._attach_comments(item)
             else:
                 log.info(
                     "fetching item %d/%d (page): %s", count + 1, total, url

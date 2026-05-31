@@ -176,6 +176,14 @@ class Pipeline:
             item.title, item.key, status, action.value,
         )
 
+        # Now that we're keeping the item, fetch supplementary data (e.g.
+        # comments). Skipped duplicates never reach here, so they cost no
+        # extra crawling. Best-effort: enrich must never block archiving.
+        try:
+            self.source.enrich(item)
+        except Exception as exc:
+            log.warning("enrich failed for %r: %s", item.title, exc)
+
         # Ingest: download images, run AI, persist the full item to the store.
         try:
             self.ingestor.ingest(item)

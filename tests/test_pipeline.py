@@ -30,6 +30,7 @@ class FakeSource(Source):
 
     def __init__(self, item):
         self.item = item
+        self.enrich_calls = 0
 
     def supports(self, url):
         return True
@@ -41,6 +42,9 @@ class FakeSource(Source):
 
     def fetch_batch(self, url):
         yield self.item
+
+    def enrich(self, item):
+        self.enrich_calls += 1
 
 
 class RecordingExporter(Exporter):
@@ -110,6 +114,31 @@ def test_duplicate_update_policy(tmp_path, store):
     out2 = p.archive_url("u")
     assert out2.action == Action.UPDATED
     assert len(exp.exported) == 2
+
+
+def test_skipped_duplicate_does_not_enrich(tmp_path, store):
+    # A skipped duplicate must not trigger enrich (e.g. a comment crawl):
+    # enrich runs only for items we actually archive/update.
+    item = _item()
+    cfg = Config()
+    cfg.archive.on_duplicate = "skip"
+    p = _pipeline(cfg, item, [RecordingExporter(tmp_path)], store, tmp_path)
+    p.archive_url("u")  # new -> archived -> enriched once
+    assert p.source.enrich_calls == 1
+    out2 = p.archive_url("u")  # unchanged -> skipped -> NOT enriched
+    assert out2.action == Action.SKIPPED
+    assert p.source.enrich_calls == 1  # unchanged
+
+
+def test_updated_duplicate_enriches_again(tmp_path, store):
+    # Under the update policy, a re-archived item is enriched each time.
+    item = _item()
+    cfg = Config()
+    cfg.archive.on_duplicate = "update"
+    p = _pipeline(cfg, item, [RecordingExporter(tmp_path)], store, tmp_path)
+    p.archive_url("u")
+    p.archive_url("u")
+    assert p.source.enrich_calls == 2
 
 
 def test_dedup_is_db_based_not_file_based(tmp_path, store):
