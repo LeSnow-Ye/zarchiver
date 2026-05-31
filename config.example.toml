@@ -33,7 +33,7 @@ on_duplicate = "skip"
 comments = true
 # Max comments to record per item, counting child replies (0 = unlimited).
 # Popular content can have thousands, so the default is capped.
-max_comments = 100
+max_comments = 150
 # Download embedded videos (<a class="video-box">) as MP4 files so they play
 # offline. Turn off to keep just a poster image + link (saves space/bandwidth).
 download_videos = true
@@ -52,9 +52,8 @@ max_asset_mb = 20.0
 prefer_api_content = true
 
 [browser]
-# Zhihu blocks headless chrome-headless-shell. Keep this false (headful).
 # On a real headless server, run the CLI under `xvfb-run`.
-headless = false
+headless = true
 locale = "zh-CN"
 # Persistent login state saved by `zarchiver login`. Gitignored.
 storage_state = "storage_state.json"
@@ -63,8 +62,8 @@ storage_state = "storage_state.json"
 cookie_string = ""
 nav_timeout_ms = 40000
 # Polite randomized delay between items in a batch (milliseconds).
-min_delay_ms = 1200
-max_delay_ms = 3500
+min_delay_ms = 0 # 1000
+max_delay_ms = 0 # 5000
 # Cap items pulled from a collection/column per run (0 = unlimited).
 max_items = 0
 
@@ -107,9 +106,9 @@ base_url = "https://api.deepseek.com"
 api_key = ""
 model = "deepseek-v4-flash"
 # deepseek-v4-flash is a reasoning model; keep max_tokens generous.
-max_tokens = 1200
-temperature = 0.3
-max_input_chars = 12000
+max_tokens = 2048
+temperature = 0.2
+max_input_chars = 20000
 timeout_s = 120
 # Language for summaries/tags: "zh" or "en".
 language = "zh"
