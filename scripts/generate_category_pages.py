@@ -7,6 +7,7 @@ Usage::
     uv run python scripts/generate_category_pages.py /path/to/vault --output-dir 分类
     uv run python scripts/generate_category_pages.py /path/to/vault --if-exists merge
     uv run python scripts/generate_category_pages.py /path/to/vault --dataview-serializer
+    uv run python scripts/generate_category_pages.py /path/to/vault --generate-graph-settings
 
 By default files are written under ``<vault>/目录/``. If that directory already
 exists, the script asks whether to delete it, merge into it, or abort. In
@@ -16,7 +17,10 @@ non-interactive shells, use ``--if-exists delete`` or ``--if-exists merge``.
 from __future__ import annotations
 
 import argparse
+import colorsys
 import hashlib
+import json
+import random
 import re
 import shutil
 import sys
@@ -32,6 +36,7 @@ QUERY_TEMPLATE = (
     '<!-- QueryToSerialize: TABLE tags AS "Tags", summary AS "Summary" '
     'SORT archived_at ASC WHERE category="{category}" -->\n'
 )
+GOLDEN_RATIO_CONJUGATE = 0.618033988749895
 
 # Characters not allowed in file names on common filesystems / Obsidian.
 _ILLEGAL_FILENAME = re.compile(r'[\\/:*?"<>|#^\[\]]')
@@ -289,6 +294,55 @@ def render_dataview_serializer_query(
     return content
 
 
+def _rgb_int_from_hsl(hue: float, saturation: float, lightness: float) -> int:
+    red, green, blue = colorsys.hls_to_rgb(hue, lightness, saturation)
+    r = round(red * 255)
+    g = round(green * 255)
+    b = round(blue * 255)
+    return (r << 16) + (g << 8) + b
+
+
+def _category_graph_query(category: str) -> str:
+    return f'["category":{category}]'
+
+
+def render_graph_settings(
+    categories: list[str],
+    *,
+    rng: random.Random | None = None,
+) -> str:
+    """Render Obsidian graph settings with readable, distributed colors."""
+    rng = rng or random.Random()
+    hue = rng.random()
+    color_groups = []
+    for category in categories:
+        hue = (hue + GOLDEN_RATIO_CONJUGATE) % 1.0
+        saturation = rng.uniform(0.58, 0.74)
+        lightness = rng.uniform(0.54, 0.66)
+        color_groups.append(
+            {
+                "query": _category_graph_query(category),
+                "color": {
+                    "a": 1,
+                    "rgb": _rgb_int_from_hsl(hue, saturation, lightness),
+                },
+            }
+        )
+
+    settings = {
+        "showTags": True,
+        "colorGroups": color_groups,
+    }
+    return json.dumps(settings, ensure_ascii=False, indent=2) + "\n"
+
+
+def write_graph_settings(vault: Path, categories: list[str]) -> Path:
+    graph_path = vault / ".obsidian" / "graph.json"
+    graph_path.parent.mkdir(parents=True, exist_ok=True)
+    graph_path.write_text(render_graph_settings(categories), encoding="utf-8")
+    return graph_path
+
+
 def category_filename(category: str, used: set[str]) -> str:
     """Return a safe, unique ``.md`` filename for ``category``."""
     stem = sanitize_filename(category)
@@ -423,6 +477,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Sort notes by archived_at descending, newest first.",
     )
+    parser.add_argument(
+        "--generate-graph-settings",
+        action="store_true",
+        help="Overwrite <vault>/.obsidian/graph.json with category color groups.",
+    )
     args = parser.parse_args(argv)
 
     vault = args.vault.expanduser().resolve()
@@ -445,6 +504,7 @@ def main(argv: list[str] | None = None) -> int:
     notes_by_category, markdown_count, notes_with_category = scan_notes(
         vault, exclude_dir=output_dir
     )
+    categories = sorted(notes_by_category)
 
     try:
         prepare_output_dir(output_dir, args.if_exists)
@@ -457,12 +517,18 @@ def main(argv: list[str] | None = None) -> int:
     except RuntimeError as exc:
         parser.exit(1, f"error: {exc}\n")
 
+    graph_path = None
+    if args.generate_graph_settings:
+        graph_path = write_graph_settings(vault, categories)
+
     print(
         f"scanned {markdown_count} markdown files; "
         f"found {len(notes_by_category)} categories in {notes_with_category} notes",
         file=sys.stderr,
     )
     print(f"wrote {len(written)} files to {output_dir}", file=sys.stderr)
+    if graph_path is not None:
+        print(f"wrote graph settings to {graph_path}", file=sys.stderr)
     return 0
 
 

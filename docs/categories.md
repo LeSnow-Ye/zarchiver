@@ -80,3 +80,71 @@ category_reference = """
 - **可选**：随时把 `category_reference` 清空即可退回自由生成模式。
 - **配置位置**：`config.toml` 是你的个人配置（已 gitignore）；`config.example.toml`
   给出空值示例与完整说明。
+
+## 为 Obsidian 生成分类目录
+
+归档导出到 Obsidian vault 后，可以按 Markdown frontmatter 中的 `category` 自动生成分类目录：
+
+```bash
+uv run python scripts/generate_category_pages.py /path/to/vault
+```
+
+脚本递归扫描 vault 中的 Markdown 文件，默认在 `<vault>/目录/` 下为每个分类生成一个
+`<category>.md` 文件。目录文件包含静态 Markdown 表格：
+
+```markdown
+| File | Tags | Summary |
+| --- | --- | --- |
+| [[example]] | #Tag1 #Tag2 | 摘要 |
+```
+
+`File` 使用源 Markdown 文件名，不使用 frontmatter 中的 `title`。例如 `example.md`
+会生成 `[[example]]`。可以使用 `-o` 指定 vault 内的其他目录：
+
+```bash
+uv run python scripts/generate_category_pages.py /path/to/vault -o 分类目录
+```
+
+如果目标目录已经存在，脚本会询问是删除、合并还是退出。非交互环境中应显式选择策略：
+
+```bash
+uv run python scripts/generate_category_pages.py /path/to/vault --if-exists merge
+uv run python scripts/generate_category_pages.py /path/to/vault --if-exists delete
+```
+
+### 使用 Obsidian Dataview Serializer 插件
+
+如果使用 [Dataview](https://blacksmithgu.github.io/obsidian-dataview/) 及 [Obsidian Dataview Serializer](https://developassion.gitbook.io/obsidian-dataview-serializer) 插件，可以让目录文件包含待序列化查询，而不是静态表格：
+
+```bash
+uv run python scripts/generate_category_pages.py /path/to/vault --dataview-serializer
+```
+
+生成内容形如：
+
+```markdown
+<!-- QueryToSerialize: TABLE tags AS "Tags", summary AS "Summary" SORT archived_at ASC WHERE category="技术" -->
+```
+
+### 按归档时间倒序
+
+添加 `--sort-by-time` 可按 `archived_at` 倒序排列，最新归档的条目在最上方：
+
+```bash
+uv run python scripts/generate_category_pages.py /path/to/vault --sort-by-time
+```
+
+静态表格会直接按时间排序；Dataview Serializer 模式下会生成
+`SORT archived_at DESC`。缺失或无法解析 `archived_at` 的条目排在最后。
+
+### 生成图谱颜色设置
+
+添加 `--generate-graph-settings` 可额外覆盖生成 `<vault>/.obsidian/graph.json`：
+
+```bash
+uv run python scripts/generate_category_pages.py /path/to/vault --generate-graph-settings
+```
+
+脚本为每个分类添加一个 Obsidian 图谱颜色组，并启用标签显示。颜色会在适合阅读的饱和度
+和亮度范围内随机生成，同时分散色相，减少相邻分类颜色过于接近的情况。由于会直接覆盖
+现有 `graph.json`，请先确认其中没有需要保留的手工配置。

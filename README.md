@@ -19,7 +19,9 @@ localization, AI summaries/tags via DeepSeek, and content-hash dedup. See
 [docs/architecture.md](docs/architecture.md) for the design,
 [docs/usage.md](docs/usage.md) for commands,
 [docs/configuration.md](docs/configuration.md) for config, and
-[docs/scraping.md](docs/scraping.md) for the scraping approach.
+[docs/scraping.md](docs/scraping.md) for the scraping approach. See
+[docs/categories.md](docs/categories.md) for category maintenance and Obsidian
+category directory generation.
 
 ## Highlights
 

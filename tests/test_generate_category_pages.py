@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -192,3 +193,37 @@ def test_skips_invalid_frontmatter(tmp_path, capsys):
     assert rc == 0
     assert (vault / "目录" / "技术.md").exists()
     assert "warning: skipped" in capsys.readouterr().err
+
+
+def test_generate_graph_settings_writes_obsidian_graph_json(tmp_path):
+    vault = tmp_path / "vault"
+    graph_path = vault / ".obsidian" / "graph.json"
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_text("old", encoding="utf-8")
+    (vault / "a.md").write_text("---\ncategory: 技术\n---\n", encoding="utf-8")
+    (vault / "b.md").write_text("---\ncategory: 生活\n---\n", encoding="utf-8")
+
+    rc = generate_category_pages.main(
+        [str(vault), "--if-exists", "abort", "--generate-graph-settings"]
+    )
+
+    assert rc == 0
+    data = json.loads(graph_path.read_text(encoding="utf-8"))
+    assert data["showTags"] is True
+    assert [group["query"] for group in data["colorGroups"]] == [
+        '["category":技术]',
+        '["category":生活]',
+    ]
+    for group in data["colorGroups"]:
+        assert group["color"]["a"] == 1
+        assert 0 <= group["color"]["rgb"] <= 0xFFFFFF
+
+
+def test_render_graph_settings_can_escape_json_strings():
+    content = generate_category_pages.render_graph_settings(
+        ['a "quote"'],
+        rng=generate_category_pages.random.Random(0),
+    )
+
+    data = json.loads(content)
+    assert data["colorGroups"][0]["query"] == '["category":a "quote"]'
