@@ -123,7 +123,7 @@ uv run python scripts/generate_category_pages.py /path/to/vault --dataview-seria
 生成内容形如：
 
 ```markdown
-<!-- QueryToSerialize: TABLE tags AS "Tags", summary AS "Summary" SORT archived_at ASC WHERE category="技术" -->
+<!-- QueryToSerialize: TABLE tags AS "Tags", summary AS "Summary" WHERE category="技术" -->
 ```
 
 ### 按归档时间倒序

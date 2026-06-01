@@ -53,7 +53,7 @@ def test_dataview_serializer_generates_query_pages(tmp_path):
     assert rc == 0
     assert (vault / "目录" / "技术.md").read_text(encoding="utf-8") == (
         '<!-- QueryToSerialize: TABLE tags AS "Tags", summary AS "Summary" '
-        'SORT archived_at ASC WHERE category="技术" -->\n'
+        'WHERE category="技术" -->\n'
     )
 
 

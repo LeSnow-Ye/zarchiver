@@ -34,7 +34,7 @@ import yaml
 
 QUERY_TEMPLATE = (
     '<!-- QueryToSerialize: TABLE tags AS "Tags", summary AS "Summary" '
-    'SORT archived_at ASC WHERE category="{category}" -->\n'
+    '{sort_clause}WHERE category="{category}" -->\n'
 )
 GOLDEN_RATIO_CONJUGATE = 0.618033988749895
 
@@ -288,10 +288,11 @@ def render_markdown_table(
 def render_dataview_serializer_query(
     category: str, *, sort_archived_desc: bool = False
 ) -> str:
-    content = QUERY_TEMPLATE.format(category=_query_category_literal(category))
-    if sort_archived_desc:
-        content = content.replace("SORT archived_at ASC", "SORT archived_at DESC")
-    return content
+    sort_clause = "SORT archived_at DESC " if sort_archived_desc else ""
+    return QUERY_TEMPLATE.format(
+        sort_clause=sort_clause,
+        category=_query_category_literal(category),
+    )
 
 
 def _rgb_int_from_hsl(hue: float, saturation: float, lightness: float) -> int:
@@ -473,7 +474,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Write QueryToSerialize comments instead of static Markdown tables.",
     )
     parser.add_argument(
-        "-sort", "--sort-by-time",
+        "-sbt", "--sort-by-time",
         action="store_true",
         help="Sort notes by archived_at descending, newest first.",
     )
