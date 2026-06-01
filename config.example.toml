@@ -113,8 +113,8 @@ model = "deepseek-v4-flash"
 # deepseek-v4-flash is a reasoning model; keep max_tokens generous.
 max_tokens = 2048
 temperature = 0.2
-# Set to 0 to disable input truncation
-max_input_chars = 20000
+# Set to 0 to disable input truncation (Recommended)
+max_input_chars = 0 # 20000
 timeout_s = 120
 # Language for summaries/tags: "zh" or "en".
 language = "zh"
