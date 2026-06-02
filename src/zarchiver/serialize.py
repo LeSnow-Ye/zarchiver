@@ -9,8 +9,7 @@ each dataclass into JSON and back.
 
 Round-trip invariant: ``item_from_row(row_from_item(item))`` reconstructs an
 ``ArchiveItem`` whose :meth:`~zarchiver.models.ArchiveItem.content_hash` equals
-the original's, so the AI cache and dedup keys stay stable across a store
-reload.
+the original's, so dedup keys stay stable across a store reload.
 """
 
 from __future__ import annotations

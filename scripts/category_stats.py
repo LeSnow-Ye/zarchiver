@@ -8,9 +8,7 @@ script tallies them to (a) reveal the sprawl and (b) feed the result back to an
 LLM as the raw material for a consolidated reference taxonomy.
 
 Source of truth is the ``items`` table's ``ai_json`` column (the category
-actually attached to each archived item). ``--source ai_cache`` instead reads
-the ``ai_cache.category`` column (memoized results, keyed by content hash);
-the two are usually near-identical.
+actually attached to each archived item).
 
 Usage::
 
@@ -18,7 +16,6 @@ Usage::
     uv run python scripts/category_stats.py -o cats.md       # ... to a file
     uv run python scripts/category_stats.py --format tsv     # count<TAB>category
     uv run python scripts/category_stats.py --format json    # {category: count}
-    uv run python scripts/category_stats.py --source ai_cache
 """
 
 from __future__ import annotations
@@ -49,21 +46,6 @@ def _categories_from_items(conn: sqlite3.Connection) -> tuple[Counter, int, int]
                 data = None
             if isinstance(data, dict):
                 category = str(data.get("category") or "").strip()
-        if category:
-            counts[category] += 1
-        else:
-            missing += 1
-    return counts, total, missing
-
-
-def _categories_from_cache(conn: sqlite3.Connection) -> tuple[Counter, int, int]:
-    """Tally categories from the ``ai_cache.category`` column."""
-    counts: Counter = Counter()
-    total = 0
-    missing = 0
-    for (category,) in conn.execute("SELECT category FROM ai_cache"):
-        total += 1
-        category = (category or "").strip()
         if category:
             counts[category] += 1
         else:
@@ -118,10 +100,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to the SQLite archive (default: zarchiver.db).",
     )
     parser.add_argument(
-        "--source", choices=("items", "ai_cache"), default="items",
-        help="Where to read categories from (default: items).",
-    )
-    parser.add_argument(
         "--format", choices=tuple(_RENDERERS), default="markdown",
         help="Output format (default: markdown).",
     )
@@ -136,15 +114,12 @@ def main(argv: list[str] | None = None) -> int:
 
     conn = sqlite3.connect(str(args.db))
     try:
-        if args.source == "items":
-            counts, total, missing = _categories_from_items(conn)
-        else:
-            counts, total, missing = _categories_from_cache(conn)
+        counts, total, missing = _categories_from_items(conn)
     finally:
         conn.close()
 
     text = _RENDERERS[args.format](
-        counts, source=args.source, total=total, missing=missing
+        counts, source="items", total=total, missing=missing
     )
 
     if args.output:

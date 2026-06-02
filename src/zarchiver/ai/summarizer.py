@@ -9,8 +9,6 @@ category) via an :class:`LLMProvider`, with:
 * An optional category reference taxonomy (``AIConfig.category_reference``):
   when set, the model is asked to prefer it; when empty, it free-generates the
   category. See :mod:`scripts.category_stats` and ``docs/categories.md``.
-* Caching keyed by ``content_hash`` through the :class:`StateStore`, so the same
-  body is never summarized twice.
 """
 
 from __future__ import annotations
@@ -19,14 +17,13 @@ import json
 import logging
 import re
 import time
-from typing import Callable, Optional
+from typing import Callable
 
 from bs4 import BeautifulSoup
 
 from zarchiver.ai.base import LLMError, LLMProvider
 from zarchiver.config import AIConfig
 from zarchiver.models import AIResult, ArchiveItem
-from zarchiver.store import StateStore
 
 log = logging.getLogger(__name__)
 
@@ -137,30 +134,21 @@ class Summarizer:
         self,
         config: AIConfig,
         provider: LLMProvider,
-        store: Optional[StateStore] = None,
     ):
         self.config = config
         self.provider = provider
-        self.store = store
 
-    def summarize(self, item: ArchiveItem, *, use_cache: bool = True) -> AIResult:
-        """Return an :class:`AIResult` for ``item`` (cached when possible)."""
-        chash = item.content_hash()
-        if use_cache and self.store is not None:
-            cached = self.store.get_ai(chash)
-            if cached is not None and not cached.is_empty():
-                log.debug("AI cache hit for %s (%r)", item.source_id, item.title)
-                return cached
-
+    def summarize(self, item: ArchiveItem) -> AIResult:
+        """Return an :class:`AIResult` for ``item``."""
         body = self._prepare_body(item.content_html)
         system, instruction = self._prompts(item.title, body)
         log.debug(
             "calling %s for %r (%d chars in)",
             self.config.model, item.title, len(body),
         )
-        
+
         start = time.monotonic()
-        
+
         reply = self.provider.complete(system, instruction, json_mode=True)
         result = self._parse(reply)
         result.model = self.config.model
@@ -169,22 +157,18 @@ class Summarizer:
             time.monotonic() - start,
             len(body), result.category, len(result.tags),
         )
-
-        if self.store is not None and not result.is_empty():
-            self.store.put_ai(chash, result)
         return result
 
     def summarize_with_retry(
         self,
         item: ArchiveItem,
         *,
-        use_cache: bool = True,
         max_retries: int = 2,
         sleep: Callable[[float], None] = time.sleep,
     ) -> AIResult:
         """Return an AI summary, retrying transient provider failures."""
         return retry_ai_summary(
-            lambda: self.summarize(item, use_cache=use_cache),
+            lambda: self.summarize(item),
             title=item.title,
             max_retries=max_retries,
             sleep=sleep,

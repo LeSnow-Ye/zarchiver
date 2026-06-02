@@ -111,15 +111,6 @@ def test_iter_items_limit(store):
     assert len(list(store.iter_items(limit=3))) == 3
 
 
-def test_ai_cache_unchanged(store):
-    store.put_ai("hash123", AIResult(summary="s", tags=["x"], category="c", model="m"))
-    got = store.get_ai("hash123")
-    assert got is not None
-    assert got.summary == "s"
-    assert got.tags == ["x"]
-    assert store.get_ai("missing") is None
-
-
 def test_batch_round_trip(store):
     item = _item()
     item.batch = BatchInfo(
@@ -185,5 +176,13 @@ def test_existing_v1_db_migrates_asset_issues_column(tmp_path):
         item.asset_issues = {"https://pic.zhimg.com/missing.jpg": "failed"}
         store.save_item(item)
         assert store.load_item(item.key).asset_issues == item.asset_issues
+        # The redundant ai_cache table is dropped on open.
+        tables = {
+            r[0]
+            for r in store._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "ai_cache" not in tables
     finally:
         store.close()

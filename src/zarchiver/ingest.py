@@ -6,7 +6,7 @@ Ingest is the *write* half of the archive flow. Given an
 1. Downloads every referenced image (article body, comment bodies, and the
    title image) **once** into a per-item directory under the assets root, and
    records a ``{remote_url: relative_local_path}`` map on the item.
-2. Runs AI summarization/tagging (cached by content hash).
+2. Runs AI summarization/tagging.
 3. Persists the complete item — content, comments, AI result, asset map, and
    the original parsed ``raw`` dict — to the store.
 

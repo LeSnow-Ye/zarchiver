@@ -1,7 +1,4 @@
-"""AI summarizer tests: prompt building, robust JSON parsing, caching (offline)."""
-
-import tempfile
-from pathlib import Path
+"""AI summarizer tests: prompt building, robust JSON parsing (offline)."""
 
 import pytest
 
@@ -9,7 +6,6 @@ from zarchiver.ai.base import LLMError, LLMProvider
 from zarchiver.ai.summarizer import Summarizer, _extract_json
 from zarchiver.config import AIConfig
 from zarchiver.models import ArchiveItem, ContentType
-from zarchiver.store import StateStore
 
 
 class FakeProvider(LLMProvider):
@@ -71,7 +67,7 @@ def test_extract_json_garbage():
 def test_summarize_parses_result():
     p = FakeProvider('{"summary":"摘要","tags":["python","学习"],"category":"编程"}')
     s = Summarizer(AIConfig(api_key="x"), p)
-    r = s.summarize(_item(), use_cache=False)
+    r = s.summarize(_item())
     assert r.summary == "摘要"
     assert r.tags == ["python", "学习"]
     assert r.category == "编程"
@@ -81,34 +77,21 @@ def test_summarize_parses_result():
 def test_summarize_requests_json_mode():
     p = FakeProvider('{"summary":"s","tags":["a"],"category":"c"}')
     s = Summarizer(AIConfig(api_key="x"), p)
-    s.summarize(_item(), use_cache=False)
+    s.summarize(_item())
     assert p.last_json_mode is True
 
 
 def test_summarize_tags_as_string():
     p = FakeProvider('{"summary":"s","tags":"a，b、c","category":"x"}')
     s = Summarizer(AIConfig(api_key="x"), p)
-    r = s.summarize(_item(), use_cache=False)
+    r = s.summarize(_item())
     assert r.tags == ["a", "b", "c"]
-
-
-def test_summarize_uses_cache():
-    with tempfile.TemporaryDirectory() as d:
-        store = StateStore(Path(d) / "t.db")
-        p = FakeProvider('{"summary":"s","tags":["a"],"category":"c"}')
-        s = Summarizer(AIConfig(api_key="x"), p, store)
-        item = _item()
-        r1 = s.summarize(item)
-        r2 = s.summarize(item)  # should hit cache, not call provider again
-        assert p.calls == 1
-        assert r2.summary == "s"
-        store.close()
 
 
 def test_summarize_fallback_on_non_json():
     p = FakeProvider("这是一段没有 JSON 的回复")
     s = Summarizer(AIConfig(api_key="x"), p)
-    r = s.summarize(_item(), use_cache=False)
+    r = s.summarize(_item())
     assert "没有 JSON" in r.summary
 
 
@@ -117,7 +100,6 @@ def test_summarize_with_retry_recovers():
     s = Summarizer(AIConfig(api_key="x"), p)
     r = s.summarize_with_retry(
         _item(),
-        use_cache=False,
         max_retries=2,
         sleep=lambda _: None,
     )
@@ -131,7 +113,6 @@ def test_summarize_with_retry_exhausts():
     with pytest.raises(LLMError):
         s.summarize_with_retry(
             _item(),
-            use_cache=False,
             max_retries=2,
             sleep=lambda _: None,
         )
@@ -198,6 +179,6 @@ def test_deepseek_live_summarize():
     cfg = AIConfig(api_key=key)
     provider = build_provider(cfg)
     s = Summarizer(cfg, provider)
-    r = s.summarize(_item(), use_cache=False)
+    r = s.summarize(_item())
     assert r.summary
     assert r.model == cfg.model

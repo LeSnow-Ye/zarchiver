@@ -1,15 +1,11 @@
-"""SQLite-backed archive store: system of record + AI cache.
+"""SQLite-backed archive store: the system of record for archived content.
 
-The store is the single source of truth for archived content. It holds:
-
-* **Items** — the full :class:`~zarchiver.models.ArchiveItem` for every archived
-  piece of content: scalar metadata in columns, and the nested structures
-  (author, comments, batch, AI result, asset map, raw parsed dict) as JSON text.
-  Dedup is keyed by the item's globally-unique
-  :pyattr:`~zarchiver.models.ArchiveItem.key`; the stored ``content_hash`` lets
-  re-runs skip unchanged content or detect edits.
-* **AI cache** — LLM results memoized by ``content_hash`` so the same body is
-  never summarized twice, even across runs.
+The store is the single source of truth for archived content. It holds the full
+:class:`~zarchiver.models.ArchiveItem` for every archived piece of content:
+scalar metadata in columns, and the nested structures (author, comments, batch,
+AI result, asset map, raw parsed dict) as JSON text. Dedup is keyed by the item's
+globally-unique :pyattr:`~zarchiver.models.ArchiveItem.key`; the stored
+``content_hash`` lets re-runs skip unchanged content or detect edits.
 
 Images are *not* stored in the DB: their bytes live on disk under an assets root
 (one directory per item key), and the item's ``asset_map`` (remote URL → local
@@ -19,13 +15,12 @@ rewrite ``<img>`` offline and reports can distinguish skipped/failed assets.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
-from zarchiver.models import AIResult, ArchiveItem
+from zarchiver.models import ArchiveItem
 from zarchiver.serialize import item_from_row, row_from_item
 
 SCHEMA_VERSION = 2
@@ -65,15 +60,6 @@ CREATE TABLE IF NOT EXISTS items (
 
 CREATE INDEX IF NOT EXISTS idx_items_content_type ON items(content_type);
 CREATE INDEX IF NOT EXISTS idx_items_updated_at ON items(updated_at);
-
-CREATE TABLE IF NOT EXISTS ai_cache (
-    content_hash  TEXT PRIMARY KEY,
-    model         TEXT,
-    summary       TEXT,
-    tags_json     TEXT,
-    category      TEXT,
-    created_at    TEXT NOT NULL
-);
 """
 
 # Columns written by save_item that come from serialize.row_from_item().
@@ -91,7 +77,7 @@ def _now() -> str:
 
 
 class StateStore:
-    """Persistent archive store + AI cache backed by a single SQLite file."""
+    """Persistent archive store backed by a single SQLite file."""
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
@@ -109,6 +95,9 @@ class StateStore:
         except sqlite3.OperationalError as exc:
             if "duplicate column name" not in str(exc).lower():
                 raise
+        # The AI result is persisted on the item itself (items.ai_json); the old
+        # standalone ai_cache table was a redundant second copy — drop it.
+        self._conn.execute("DROP TABLE IF EXISTS ai_cache")
 
     def close(self) -> None:
         self._conn.close()
@@ -205,42 +194,3 @@ class StateStore:
             "SELECT * FROM items ORDER BY updated_at DESC LIMIT ?", (limit,)
         )
         return cur.fetchall()
-
-    # ------------------------------------------------------------------ #
-    # AI cache
-    # ------------------------------------------------------------------ #
-    def get_ai(self, content_hash: str) -> Optional[AIResult]:
-        cur = self._conn.execute(
-            "SELECT * FROM ai_cache WHERE content_hash = ?", (content_hash,)
-        )
-        row = cur.fetchone()
-        if row is None:
-            return None
-        try:
-            tags = json.loads(row["tags_json"]) if row["tags_json"] else []
-        except json.JSONDecodeError:
-            tags = []
-        return AIResult(
-            summary=row["summary"] or "",
-            tags=tags,
-            category=row["category"] or "",
-            model=row["model"] or "",
-        )
-
-    def put_ai(self, content_hash: str, result: AIResult) -> None:
-        self._conn.execute(
-            """
-            INSERT INTO ai_cache
-                (content_hash, model, summary, tags_json, category, created_at)
-            VALUES (?,?,?,?,?,?)
-            ON CONFLICT(content_hash) DO UPDATE SET
-                model=excluded.model, summary=excluded.summary,
-                tags_json=excluded.tags_json, category=excluded.category,
-                created_at=excluded.created_at
-            """,
-            (
-                content_hash, result.model, result.summary,
-                json.dumps(result.tags, ensure_ascii=False), result.category, _now(),
-            ),
-        )
-        self._conn.commit()

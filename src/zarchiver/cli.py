@@ -120,7 +120,7 @@ def _build_exporters(
     return exporters
 
 
-def _build_summarizer(cfg: Config, store) -> Optional[Summarizer]:
+def _build_summarizer(cfg: Config) -> Optional[Summarizer]:
     if not cfg.ai.enabled:
         return None
     if not cfg.ai.api_key:
@@ -130,7 +130,7 @@ def _build_summarizer(cfg: Config, store) -> Optional[Summarizer]:
         )
         return None
     try:
-        s = Summarizer(cfg.ai, build_provider(cfg.ai), store)
+        s = Summarizer(cfg.ai, build_provider(cfg.ai))
         log.debug("AI summarizer ready (%s)", cfg.ai.model)
         return s
     except Exception as exc:
@@ -149,7 +149,7 @@ def _build_pipeline(
 
     store = StateStore(cfg.archive.db_path)
     fetch = make_image_fetcher(cfg)
-    summarizer = _build_summarizer(cfg, store)
+    summarizer = _build_summarizer(cfg)
 
     # Auto-export targets follow archive.auto_export; an empty list (or
     # --no-export) means ingest only.
