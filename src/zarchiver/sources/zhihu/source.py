@@ -331,7 +331,9 @@ class ZhihuSource(Source):
         batch = self._make_batch(
             BatchKind.COLLECTION, title, cid, target.raw_url
         )
-        yield from self._iter_api_or_fetch(entries, batch)
+        # Zhihu lists newest items first. Archive from the tail toward the
+        # front so repeated exports keep the collection's natural chronology.
+        yield from self._iter_api_or_fetch(list(reversed(entries)), batch)
 
     def _fetch_column(self, target: ZhihuTarget) -> Iterator[ArchiveItem]:
         cid = target.column_id
@@ -344,7 +346,9 @@ class ZhihuSource(Source):
             self._get_json(f"https://www.zhihu.com/api/v4/columns/{cid}")
         )
         batch = self._make_batch(BatchKind.COLUMN, title, cid, target.raw_url)
-        yield from self._iter_api_or_fetch(entries, batch)
+        # Zhihu lists newest items first. Archive from the tail toward the
+        # front so repeated exports keep the column's natural chronology.
+        yield from self._iter_api_or_fetch(list(reversed(entries)), batch)
 
     def _walk_api_pages(self, first_url: str, *, label: str) -> list[dict]:
         """Page through an items/answers API, collecting archivable entries.

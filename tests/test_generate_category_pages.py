@@ -100,6 +100,8 @@ def test_sort_archived_desc_orders_table_newest_first(tmp_path):
         encoding="utf-8",
     )
     (vault / "missing.md").write_text("---\ncategory: 技术\n---\n", encoding="utf-8")
+    (vault / "zzz.md").write_text("---\ncategory: 技术\n---\n", encoding="utf-8")
+    (vault / "aaa.md").write_text("---\ncategory: 技术\n---\n", encoding="utf-8")
 
     rc = generate_category_pages.main(
         [str(vault), "--if-exists", "abort", "--sort-by-time"]
@@ -109,6 +111,8 @@ def test_sort_archived_desc_orders_table_newest_first(tmp_path):
     content = (vault / "目录" / "技术.md").read_text(encoding="utf-8")
     assert content.index("[[new]]") < content.index("[[old]]")
     assert content.index("[[old]]") < content.index("[[missing]]")
+    assert content.index("[[aaa]]") < content.index("[[missing]]")
+    assert content.index("[[missing]]") < content.index("[[zzz]]")
 
 
 def test_sort_archived_desc_updates_dataview_serializer_sort(tmp_path):

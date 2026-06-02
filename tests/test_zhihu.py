@@ -831,6 +831,47 @@ def _answer_entry(aid, content="<p>x</p>", qid=9, qtitle="Q?"):
     }
 
 
+def test_fetch_collection_archives_from_tail_first():
+    base = "https://www.zhihu.com/api/v4/collections/1/items?offset=0&limit=20"
+    pages = {
+        base: {
+            "data": [{"content": _answer_entry(i)} for i in (1, 2, 3)],
+            "paging": {"is_end": True},
+        },
+        "https://www.zhihu.com/api/v4/collections/1": {
+            "collection": {"title": "收藏"}
+        },
+    }
+    src, _ = _source_with_api(pages)
+    src._browser = _NoSleepBrowser()
+    src._video_resolver = lambda: None
+
+    items = list(src.fetch_batch("https://www.zhihu.com/collection/1"))
+
+    assert [i.source_id for i in items] == ["3", "2", "1"]
+
+
+def test_fetch_column_archives_from_tail_first():
+    base = (
+        "https://www.zhihu.com/api/v4/columns/c/items"
+        "?limit=20&ws_qiangzhisafe=0&offset=0"
+    )
+    pages = {
+        base: {
+            "data": [_answer_entry(i) for i in (1, 2, 3)],
+            "paging": {"is_end": True},
+        },
+        "https://www.zhihu.com/api/v4/columns/c": {"title": "专栏"},
+    }
+    src, _ = _source_with_api(pages)
+    src._browser = _NoSleepBrowser()
+    src._video_resolver = lambda: None
+
+    items = list(src.fetch_batch("https://www.zhihu.com/column/c"))
+
+    assert [i.source_id for i in items] == ["3", "2", "1"]
+
+
 def test_iter_api_or_fetch_uses_api_without_opening_page():
     base = "https://www.zhihu.com/api/v4/collections/1/items?offset=0&limit=20"
     pages = {base: {
@@ -892,5 +933,3 @@ def test_prefer_api_content_off_always_fetches_page():
     entries = src._walk_api_pages(base, label="collection")
     list(src._iter_api_or_fetch(entries, batch=None))
     assert fetched == ["https://www.zhihu.com/question/9/answer/2"]
-
-

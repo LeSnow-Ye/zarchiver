@@ -251,13 +251,16 @@ def _archived_at_sort_key(note: NoteEntry) -> tuple[bool, float, str]:
     return (True, archived_at.timestamp(), note.file_name.casefold())
 
 
-def _ordered_notes(notes: list[NoteEntry], *, sort_archived_desc: bool) -> list[NoteEntry]:
+def _archived_at_desc_sort_key(note: NoteEntry) -> tuple[bool, float, str]:
+    has_archived_at, timestamp, file_name = _archived_at_sort_key(note)
+    return (not has_archived_at, -timestamp if has_archived_at else 0.0, file_name)
+
+
+def _ordered_notes(
+    notes: list[NoteEntry], *, sort_archived_desc: bool
+) -> list[NoteEntry]:
     if sort_archived_desc:
-        return sorted(
-            notes,
-            key=_archived_at_sort_key,
-            reverse=True,
-        )
+        return sorted(notes, key=_archived_at_desc_sort_key)
     return sorted(notes, key=lambda item: item.file_name.casefold())
 
 
