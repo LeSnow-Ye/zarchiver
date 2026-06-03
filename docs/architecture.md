@@ -16,7 +16,7 @@ about markdown specifically.
                   │  Ingest (pipeline)                         │
                   │   1. dedup check (content_hash in DB)      │
                   │   2. download images → assets_root/<key>/  │
-                  │   3. AI summarize/tag (cached)             │
+                  │   3. AI summarize/tag                      │
                   │   4. save full item → Store (SQLite)       │
                   └───────────────┬──────────────────────────┘
                                   │  (DB = system of record)
@@ -45,13 +45,13 @@ threaded `Comment`s, an `AIResult`, an `asset_map` (remote image URL → local
 stored path), and the original parsed `raw` dict. Sources produce it; ingest
 enriches and persists it; export reconstructs it from the DB and renders it. Its
 `key` (`platform:type:source_id`) is the archive identity, and its
-`content_hash()` (title + body) keys both dedup and the AI cache. Duplicate
+`content_hash()` (title + body) keys duplicate detection. Duplicate
 detection is based on whether that key already exists in the store with an
 unchanged hash — not on output files.
 
 `serialize.py` is the single place that round-trips an `ArchiveItem` to/from the
-DB's JSON columns; the round-trip preserves `content_hash()` so dedup and the AI
-cache stay stable across reloads.
+DB's JSON columns; the round-trip preserves `content_hash()` so dedup stays
+stable across reloads.
 
 ## Modules
 
@@ -60,7 +60,7 @@ cache stay stable across reloads.
 | `models` | `ArchiveItem`, `Author`, `Comment`, `AIResult`, `BatchInfo`, `ContentType`. |
 | `serialize` | `ArchiveItem` ⇄ JSON-friendly DB row (lossless round-trip). |
 | `config` | Layered config: defaults → `config.toml` → env vars. |
-| `store` | `StateStore`: SQLite system of record (items + comments + AI + asset map) and AI cache. |
+| `store` | `StateStore`: SQLite system of record (items + comments + AI + asset map). |
 | `sources/base` | `Source` ABC: `supports(url)`, `fetch(url)`, `fetch_batch(url)`. |
 | `sources/zhihu` | Playwright browser, URL classification, `js-initialData` parser. |
 | `ingest` | `Ingestor`: download images → assets, run AI, save full item to the store. |
@@ -70,7 +70,7 @@ cache stay stable across reloads.
 | `exporters/assets` | Image download (ingest) + offline link rewriting / asset copy (export). |
 | `ai/base` | `LLMProvider` ABC. |
 | `ai/deepseek` | DeepSeek (OpenAI-compatible) provider. |
-| `ai/summarizer` | Builds prompts, parses JSON result, caches via store. |
+| `ai/summarizer` | Builds prompts, parses the JSON result into an `AIResult`. |
 | `pipeline` | Ingest orchestration + offline `export_items` fan-out. |
 | `cli` | Typer entrypoint (`login`, `archive`, `export`, `status`). |
 

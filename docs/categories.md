@@ -25,7 +25,7 @@
 uv run python scripts/category_stats.py -o category_stats.md
 ```
 
-- 默认从 `items`（系统记录）读取；`--source ai_cache` 可改读 AI 缓存。
+- 从 `items`（系统记录）读取每个条目的 `category`。
 - `--format tsv|json` 可换输出格式；不带 `-o` 时直接打印到终端。
 - 输出顶部是统计摘要（条目数 / 有分类数 / 不同分类数），随后是按出现次数降序的
   `次数 — 分类名` 列表。`category_stats.md` 已在 `.gitignore` 中（属个人数据）。
@@ -74,8 +74,8 @@ category_reference = """
 
 ## 注意事项
 
-- **缓存**：AI 结果按内容哈希缓存在 `ai_cache` 表里。设置或修改 `category_reference`
-  只影响**尚未总结过**的内容；已归档条目不会自动重新分类（除非其正文变化触发重新总结）。
+- **重新分类**：设置或修改 `category_reference` 只影响**之后归档**的内容；已归档条目
+  不会自动重新分类（除非其正文变化并以 `update` 策略触发重新总结）。
 - **语言**：列表语言应与 `[ai] language` 一致；中英皆可。
 - **可选**：随时把 `category_reference` 清空即可退回自由生成模式。
 - **配置位置**：`config.toml` 是你的个人配置（已 gitignore）；`config.example.toml`

@@ -39,7 +39,7 @@ it (see [usage](usage.md)).
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `db_path` | `zarchiver.db` | SQLite file: items + comments + AI cache + asset map. |
+| `db_path` | `zarchiver.db` | SQLite file: items + comments + AI results + asset map. |
 | `assets_root` | `archive/assets` | Where images are downloaded, one subdir per item key. The DB records each image's relative path. |
 | `auto_export` | `["obsidian", "html"]` | Exporters to run automatically after ingest. Empty list = ingest only; run `export` later. |
 | `on_duplicate` | `skip` | `skip`, `update`, or `ask`. Matched by content hash in the DB. |

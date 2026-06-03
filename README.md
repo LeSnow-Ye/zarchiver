@@ -41,7 +41,7 @@ category directory generation.
 - **Comments.** Each item's comments (root + replies, threaded) are recorded and
   rendered as a `评论` section, capped at 100 per item by default.
 - **AI assist.** Summaries, tags, and a category are generated per item via an
-  LLM (DeepSeek by default) and cached so re-runs never re-pay.
+  LLM (DeepSeek by default).
 - **Dedup.** Re-runs skip items already in the DB with an unchanged content
   hash; choose skip / update / ask per duplicate.
 - **Batch or single.** Archive one URL, or a whole favorites collection or

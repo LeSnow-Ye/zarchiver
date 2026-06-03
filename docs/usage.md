@@ -25,7 +25,7 @@ uv run zarchiver -q archive <url> 2>/dev/null   # just the "Done: …" summary
 
 At `-v` you'll see, per item: the URL classification, page fetch size, parse
 result (content length, image count, whether a title image was found), the
-duplicate decision, AI cache hits / model calls, image download counts, and the
+duplicate decision, AI model calls, image download counts, and the
 exact path each exporter wrote.
 
 ## First-time setup
@@ -224,5 +224,6 @@ exported file doesn't cause a re-fetch — run `export` to regenerate it from th
 DB. When an item's content actually changes, its hash changes and `update`
 re-ingests it.
 
-AI summaries are also cached by content hash (in `archive.db_path`), so even
-when you re-archive with `update`, unchanged content is never re-sent to the LLM.
+Under `skip` (the default), an item already in the DB is left untouched — it is
+not re-fetched, re-summarized, or re-exported. To re-render output from the DB
+without re-fetching, use [`export`](#export).

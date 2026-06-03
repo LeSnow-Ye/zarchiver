@@ -3,8 +3,9 @@
 Commands:
 
 * ``login``       — open a browser, log in to Zhihu once, save the session.
-* ``archive URL`` — archive a single answer or article (auto-detects batch URLs).
-* ``collection URL`` / ``column URL`` / ``question URL`` — batch archive.
+* ``archive URL`` — archive a single answer/article/pin, or a batch (collection,
+  column, or question); the URL kind is auto-detected.
+* ``export``      — re-render already-archived items from the DB, fully offline.
 * ``status``      — show how many items are archived and the most recent ones.
 
 Everything is driven by ``config.toml`` (see ``config.example.toml``); flags on
