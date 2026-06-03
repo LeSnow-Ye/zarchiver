@@ -70,32 +70,32 @@ _CATEGORY_REF_EN = """- category: a single, broad category name. **Prefer the cl
 Reference categories:
 {reference}"""
 
-_INSTRUCTION_ZH = """请基于以下内容生成一个 JSON 对象，格式严格为：
+_INSTRUCTION_ZH = """**标题**：{title}
+**正文**：
+{body}
+
+请基于以上内容生成一个 JSON 对象，格式严格为：
 {{"summary": "200字以内的摘要", "tags": ["标签1","标签2","标签3"], "category": "单一分类"}}
 
-要求：
+**要求**：
 - summary：200 字以内，客观概括。
 - tags：3至6个，中文为主，可包括 Cpp、UE5 等惯用英文词作为标签，按相关性排序。
 {tag_rules}
 {category_block}
-
-标题：{title}
-正文：
-{body}
 """
 
-_INSTRUCTION_EN = """Generate a single JSON object strictly in this format:
+_INSTRUCTION_EN = """**Title**: {title}
+**Body**:
+{body}
+
+Generate a single JSON object strictly in this format:
 {{"summary": "a summary under 120 words", "tags": ["tag1","tag2","tag3"], "category": "one category"}}
 
-Requirements:
+**Requirements**:
 - summary: under 120 words, objective.
 - tags: 3 to 6 tags, ordered by relevance.
 {tag_rules}
 {category_block}
-
-Title: {title}
-Body:
-{body}
 """
 
 
