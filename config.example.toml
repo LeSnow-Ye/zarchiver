@@ -15,6 +15,7 @@
 #   ZARCHIVER_MAX_ASSET_MB -> archive.max_asset_mb (number; 0 disables the limit)
 #   ZARCHIVER_MAX_ASSET_RETRIES -> archive.max_asset_retries (integer; 0 disables retries)
 #   ZARCHIVER_DOWNLOAD_CONCURRENCY -> archive.download_concurrency (integer >= 1)
+#   ZARCHIVER_INCREMENTAL -> archive.incremental ("1"/"true"/"0"/"false")
 #   ZARCHIVER_PREFER_API_CONTENT -> archive.prefer_api_content ("1"/"true"/"0"/"false")
 #   ZARCHIVER_HEADLESS    -> browser.headless ("1"/"true" to force headless)
 
@@ -60,6 +61,13 @@ prefer_api_content = true
 # network-bound, so a small pool noticeably speeds up image-heavy items. Set 1
 # for fully sequential downloads.
 download_concurrency = 4
+# Incremental batch archiving: when archiving a collection/column, stop walking
+# the listing once it reaches items already in the DB (the listing is
+# newest-first). Makes periodic re-archiving cheap. It won't pick up edits to
+# already-archived items — run a full pass (--full) for that. Questions ignore
+# this (their answers are vote-ordered, not chronological). Override per run with
+# --incremental / --full.
+incremental = false
 
 [browser]
 # On a real headless server, run the CLI under `xvfb-run`.

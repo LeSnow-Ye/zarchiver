@@ -40,7 +40,7 @@ class FakeSource(Source):
             raise SourceError("boom")
         return self.item
 
-    def fetch_batch(self, url):
+    def fetch_batch(self, url, *, known=None):
         yield self.item
 
     def enrich(self, item):

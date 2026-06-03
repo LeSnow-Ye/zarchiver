@@ -16,7 +16,7 @@ from typing import Iterator, Optional
 
 from zarchiver.config import Config
 from zarchiver.models import ArchiveItem, BatchInfo, BatchKind
-from zarchiver.sources.base import Source, SourceError
+from zarchiver.sources.base import KnownPredicate, Source, SourceError
 from zarchiver.sources.zhihu import comments as C
 from zarchiver.sources.zhihu import parser as P
 from zarchiver.sources.zhihu import urls as zurls
@@ -58,13 +58,17 @@ class ZhihuSource(Source):
             raise SourceError(f"unsupported or unrecognized Zhihu URL: {url}")
         return item
 
-    def fetch_batch(self, url: str) -> Iterator[ArchiveItem]:
+    def fetch_batch(
+        self, url: str, *, known: Optional[KnownPredicate] = None
+    ) -> Iterator[ArchiveItem]:
         target = zurls.classify(url)
         if target.kind == ZhihuKind.COLLECTION:
-            yield from self._fetch_collection(target)
+            yield from self._fetch_collection(target, known=known)
         elif target.kind == ZhihuKind.COLUMN:
-            yield from self._fetch_column(target)
+            yield from self._fetch_column(target, known=known)
         elif target.kind == ZhihuKind.QUESTION:
+            # Question answers are ordered by vote, not time, so an early stop on
+            # "known" content would be unsound — ignore the predicate here.
             yield from self._fetch_question_answers(target)
         elif target.kind in (ZhihuKind.ARTICLE, ZhihuKind.ANSWER, ZhihuKind.PIN):
             # A single-item URL passed to batch mode: yield the one item.
@@ -318,12 +322,15 @@ class ZhihuSource(Source):
         "updated_time,created_time,author"
     )
 
-    def _fetch_collection(self, target: ZhihuTarget) -> Iterator[ArchiveItem]:
+    def _fetch_collection(
+        self, target: ZhihuTarget, *, known: Optional[KnownPredicate] = None
+    ) -> Iterator[ArchiveItem]:
         cid = target.collection_id
         entries = self._walk_api_pages(
             f"https://www.zhihu.com/api/v4/collections/{cid}/items"
             f"?offset=0&limit={self._API_PAGE_LIMIT}",
             label="collection",
+            known=known,
         )
         title = P.collection_title_from_api(
             self._get_json(f"https://www.zhihu.com/api/v4/collections/{cid}")
@@ -335,12 +342,15 @@ class ZhihuSource(Source):
         # front so repeated exports keep the collection's natural chronology.
         yield from self._iter_api_or_fetch(list(reversed(entries)), batch)
 
-    def _fetch_column(self, target: ZhihuTarget) -> Iterator[ArchiveItem]:
+    def _fetch_column(
+        self, target: ZhihuTarget, *, known: Optional[KnownPredicate] = None
+    ) -> Iterator[ArchiveItem]:
         cid = target.column_id
         entries = self._walk_api_pages(
             f"https://www.zhihu.com/api/v4/columns/{cid}/items"
             f"?limit={self._API_PAGE_LIMIT}&ws_qiangzhisafe=0&offset=0",
             label="column",
+            known=known,
         )
         title = P.column_title_from_api(
             self._get_json(f"https://www.zhihu.com/api/v4/columns/{cid}")
@@ -350,20 +360,40 @@ class ZhihuSource(Source):
         # front so repeated exports keep the column's natural chronology.
         yield from self._iter_api_or_fetch(list(reversed(entries)), batch)
 
-    def _walk_api_pages(self, first_url: str, *, label: str) -> list[dict]:
+    # When incremental, stop paging after this many consecutive already-archived
+    # items. A margin (vs. stopping at the first) tolerates a little reordering
+    # in the listing (e.g. an old item bumped toward the front).
+    _INCREMENTAL_STOP_MARGIN = 5
+
+    def _walk_api_pages(
+        self,
+        first_url: str,
+        *,
+        label: str,
+        known: Optional[KnownPredicate] = None,
+    ) -> list[dict]:
         """Page through an items/answers API, collecting archivable entries.
 
         Walks ``offset``-paginated pages via ``paging.next`` until the API
         reports the end, the configured ``max_items`` cap is reached, or a
         request fails. Entries are the raw API objects (carrying the full
         ``content`` body), deduped by canonical URL while preserving order.
+
+        When ``known`` is given (incremental mode), entries whose archive key is
+        already in the store are dropped, and once ``_INCREMENTAL_STOP_MARGIN``
+        already-archived items are seen in a row the walk stops early — the
+        listing is newest-first, so the remaining older items are assumed
+        archived. This makes periodic re-archiving cheap; it does NOT pick up
+        edits to old items (use a full, non-incremental run for that).
         """
         cap = self._max_items()
         entries: list[dict] = []
         seen: set[str] = set()
         url: Optional[str] = first_url
         page = 0
-        while url is not None:
+        consecutive_known = 0
+        stop_early = False
+        while url is not None and not stop_early:
             if cap and len(entries) >= cap:
                 break
             payload = self._get_json(url)
@@ -375,10 +405,23 @@ class ZhihuSource(Source):
             page += 1
             new = 0
             for obj in P.archivable_entries_from_api(payload):
-                key = P.web_url_from_api_entry(obj)
-                if key in seen:
+                dedup_key = P.web_url_from_api_entry(obj)
+                if dedup_key in seen:
                     continue
-                seen.add(key)
+                seen.add(dedup_key)
+                if known is not None:
+                    item_key = P.key_from_api_entry(obj)
+                    if item_key is not None and known(item_key):
+                        consecutive_known += 1
+                        if consecutive_known >= self._INCREMENTAL_STOP_MARGIN:
+                            log.info(
+                                "%s: %d consecutive archived item(s); stopping "
+                                "incremental walk", label, consecutive_known,
+                            )
+                            stop_early = True
+                            break
+                        continue
+                    consecutive_known = 0
                 entries.append(obj)
                 new += 1
                 if cap and len(entries) >= cap:

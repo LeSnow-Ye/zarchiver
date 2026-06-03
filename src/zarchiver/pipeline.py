@@ -172,6 +172,7 @@ class Pipeline:
         auto_export: bool = True,
         duplicate_prompt: Optional[DuplicatePrompt] = None,
         dry_run: bool = False,
+        incremental: bool = False,
         progress: Optional[Progress] = None,
     ):
         self.config = config
@@ -182,6 +183,7 @@ class Pipeline:
         self.auto_export = auto_export
         self.duplicate_prompt = duplicate_prompt
         self.dry_run = dry_run
+        self.incremental = incremental
         self._progress = progress or (lambda msg: None)
 
     # ------------------------------------------------------------------ #
@@ -199,8 +201,15 @@ class Pipeline:
         """Archive every item produced by a batch URL."""
         log.info("archiving batch %s", url)
         outcomes: list[ItemOutcome] = []
+        # In incremental mode, let the source stop walking once it reaches items
+        # already archived (sound only for time-ordered listings; the source
+        # decides whether to honor it). Disabled during a dry run so the plan
+        # reflects the full listing.
+        known = None
+        if self.incremental and not self.dry_run:
+            known = lambda key: self.store.get_record(key) is not None
         try:
-            items: Iterable[ArchiveItem] = self.source.fetch_batch(url)
+            items: Iterable[ArchiveItem] = self.source.fetch_batch(url, known=known)
         except SourceError as exc:
             log.error("failed to fetch batch %s: %s", url, exc)
             return [ItemOutcome(None, Action.FAILED, url=url, detail=str(exc))]

@@ -27,6 +27,7 @@ Values are resolved in this order, later winning:
 | `ZARCHIVER_MAX_ASSET_MB` | `archive.max_asset_mb` | Max size (MB) per downloaded asset; `0` disables the limit. |
 | `ZARCHIVER_MAX_ASSET_RETRIES` | `archive.max_asset_retries` | Retries after the first attempt for transient asset download failures; `0` disables retries. |
 | `ZARCHIVER_DOWNLOAD_CONCURRENCY` | `archive.download_concurrency` | How many of an item's images/videos to download in parallel (integer ≥ 1). |
+| `ZARCHIVER_INCREMENTAL` | `archive.incremental` | `1`/`true`/`0`/`false`; stop walking a collection/column once it reaches archived items. |
 | `ZARCHIVER_PREFER_API_CONTENT` | `archive.prefer_api_content` | `1`/`true`/`0`/`false`; build batch items from the API instead of opening pages. |
 | `ZARCHIVER_HEADLESS` | `browser.headless` | `1`/`true` forces headless. |
 
@@ -52,6 +53,7 @@ it (see [usage](usage.md)).
 | `max_asset_retries` | `2` | Retries after the first attempt for transient asset failures: timeouts, transport errors, HTTP 429, and HTTP 5xx. Permanent 4xx failures and over-size skips are never retried. `0` = single attempt. |
 | `prefer_api_content` | `true` | In batch archives, build items from the listing API's JSON (full body included) instead of opening each page — faster, and dedup happens up front. Pages are still opened as a fallback when an API entry lacks content. Set `false` to force opening every page. |
 | `download_concurrency` | `4` | How many of an item's images/videos to download in parallel. Downloads are network-bound, so a small pool speeds up image-heavy items; fetches run concurrently while files are written serially. `1` = fully sequential. |
+| `incremental` | `false` | For collection/column batches, stop walking the listing once it reaches items already archived (the listing is newest-first). Makes periodic re-archiving cheap. Won't pick up edits to already-archived items — run a full pass for that. Questions ignore it (answers are vote-ordered). Override per run with `--incremental` / `--full`. |
 
 ### `[browser]`
 

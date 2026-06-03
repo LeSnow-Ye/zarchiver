@@ -704,6 +704,51 @@ def test_api_stops_on_failed_request():
     assert src._collect_api_item_urls(base, label="collection") == ["a"]
 
 
+def test_api_incremental_skips_known_and_stops_early():
+    # Newest-first listing across two pages. The "known" predicate marks the
+    # older tail as already archived; the walk should drop those and stop once
+    # it hits a run of known items, never requesting later pages.
+    base = "https://www.zhihu.com/api/v4/collections/1/items?offset=0&limit=20"
+    p2 = "https://www.zhihu.com/api/v4/collections/1/items?offset=20&limit=20"
+    p3 = "https://www.zhihu.com/api/v4/collections/1/items?offset=40&limit=20"
+    # Page 1: two new articles (ids 100, 101), then five already-archived ones.
+    page1 = [{"content": {"type": "article", "id": i,
+                          "url": f"https://zhuanlan.zhihu.com/p/{i}",
+                          "content": "<p>x</p>"}}
+             for i in [100, 101, 1, 2, 3, 4, 5]]
+    pages = {
+        base: {"data": page1, "paging": {"is_end": False, "next": p2}},
+        p2: {"data": [], "paging": {"is_end": False, "next": p3}},
+    }
+    src, calls = _source_with_api(pages)
+    archived = {"zhihu:article:1", "zhihu:article:2", "zhihu:article:3",
+                "zhihu:article:4", "zhihu:article:5"}
+    entries = src._walk_api_pages(
+        base, label="collection", known=lambda k: k in archived
+    )
+    ids = [P.key_from_api_entry(e) for e in entries]
+    # Only the two new items kept; known tail dropped.
+    assert ids == ["zhihu:article:100", "zhihu:article:101"]
+    # Stopped after the run of 5 known on page 1 — never requested page 2.
+    assert calls == [base]
+
+
+def test_api_incremental_no_known_walks_normally():
+    # With an empty store (nothing known), incremental mode is a normal walk.
+    base = "https://www.zhihu.com/api/v4/collections/1/items?offset=0&limit=20"
+    pages = {
+        base: {
+            "data": [{"content": {"type": "article", "id": i,
+                                  "url": f"https://zhuanlan.zhihu.com/p/{i}",
+                                  "content": "<p>x</p>"}} for i in (100, 101)],
+            "paging": {"is_end": True},
+        },
+    }
+    src, _ = _source_with_api(pages)
+    entries = src._walk_api_pages(base, label="collection", known=lambda k: False)
+    assert len(entries) == 2
+
+
 # ---------------------------------------------------------------------- #
 # Building items directly from API JSON (no page fetch)
 # ---------------------------------------------------------------------- #
@@ -809,6 +854,17 @@ def test_web_url_from_api_entry():
     assert P.web_url_from_api_entry({
         "type": "article", "id": 100, "url": "x",
     }) == "https://zhuanlan.zhihu.com/p/100"
+
+
+def test_key_from_api_entry():
+    # Keys match ArchiveItem.key (zhihu:<type>:<id>) so the store can be
+    # consulted before building the full item.
+    assert P.key_from_api_entry({"type": "answer", "id": 2}) == "zhihu:answer:2"
+    assert P.key_from_api_entry({"type": "article", "id": 100}) == "zhihu:article:100"
+    assert P.key_from_api_entry({"type": "pin", "id": 7}) == "zhihu:pin:7"
+    # Unrecognized type or missing id -> None.
+    assert P.key_from_api_entry({"type": "zvideo", "id": 1}) is None
+    assert P.key_from_api_entry({"type": "answer"}) is None
 
 
 # ---------------------------------------------------------------------- #

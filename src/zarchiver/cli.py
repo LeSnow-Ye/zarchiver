@@ -158,6 +158,7 @@ def _build_pipeline(
         ingestor = Ingestor(store, assets_root=cfg.archive.assets_root, fetch=None)
         pipeline = Pipeline(
             cfg, source, [], store, ingestor, auto_export=False, dry_run=True,
+            incremental=cfg.archive.incremental,
         )
         return pipeline, store
 
@@ -193,6 +194,7 @@ def _build_pipeline(
         ingestor,
         auto_export=auto,
         duplicate_prompt=ask,
+        incremental=cfg.archive.incremental,
     )
     return pipeline, store
 
@@ -332,6 +334,13 @@ def archive(
         help="Show what would be archived/updated/skipped against the DB, "
         "without fetching content, running AI, or writing anything.",
     ),
+    incremental: Optional[bool] = typer.Option(
+        None,
+        "--incremental/--full",
+        help="For collection/column batches, stop walking the listing once it "
+        "reaches items already archived (newest-first). Overrides "
+        "archive.incremental. --full forces a complete walk.",
+    ),
 ):
     """Archive a single answer/article, or a batch (collection/column/question).
 
@@ -358,6 +367,8 @@ def archive(
         cfg.archive.download_videos = False
     if video_quality:
         cfg.archive.video_quality = video_quality.strip().upper()
+    if incremental is not None:
+        cfg.archive.incremental = incremental
     target = classify(url)
     source = ZhihuSource(cfg)
     pipeline, store = _build_pipeline(

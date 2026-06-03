@@ -133,6 +133,12 @@ class ArchiveConfig:
     # network-bound, so a small pool speeds up image-heavy items; the fetches run
     # concurrently while files are written serially. 1 = fully sequential.
     download_concurrency: int = 4
+    # Incremental batch archiving: when archiving a collection/column, stop
+    # walking the listing once it reaches items already in the DB (the listing is
+    # newest-first). Makes periodic re-archiving cheap, but won't pick up edits
+    # to already-archived items — run a full pass for that. Questions ignore this
+    # (their answers are vote-ordered, not chronological).
+    incremental: bool = False
 
 
 @dataclass
@@ -198,6 +204,8 @@ class Config:
             self.archive.prefer_api_content = v.strip().lower() in (
                 "1", "true", "yes"
             )
+        if (v := env.get("ZARCHIVER_INCREMENTAL")) is not None:
+            self.archive.incremental = v.strip().lower() in ("1", "true", "yes")
         if (v := env.get("ZARCHIVER_HEADLESS")) is not None:
             self.browser.headless = v.strip().lower() in ("1", "true", "yes")
 

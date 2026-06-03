@@ -9,9 +9,14 @@ subclass — nothing downstream changes.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Iterator
+from typing import Callable, Iterator, Optional
 
 from zarchiver.models import ArchiveItem
+
+#: Predicate the pipeline passes to ``fetch_batch`` for incremental archiving:
+#: given an item ``key``, returns True if it's already archived (so the source
+#: can stop walking once it reaches known content). See ``Pipeline.incremental``.
+KnownPredicate = Callable[[str], bool]
 
 
 class Source(ABC):
@@ -33,11 +38,19 @@ class Source(ABC):
         """
 
     @abstractmethod
-    def fetch_batch(self, url: str) -> Iterator[ArchiveItem]:
+    def fetch_batch(
+        self, url: str, *, known: Optional["KnownPredicate"] = None
+    ) -> Iterator[ArchiveItem]:
         """Yield items for a batch URL (collection, column, question, ...).
 
         Implementations should yield lazily so the pipeline can archive each
         item as it arrives rather than buffering the whole batch.
+
+        ``known``, when given, marks already-archived items by ``key``. A source
+        whose listing is in a stable chronological order (e.g. newest-first
+        collection/column items) may use it to stop walking early once it has
+        reached content it has seen before — making periodic re-archiving cheap.
+        Sources whose listing order isn't stable should ignore it.
         """
 
     def enrich(self, item: ArchiveItem) -> None:

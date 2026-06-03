@@ -682,6 +682,22 @@ def web_url_from_api_entry(obj: dict) -> str:
     return _canonical_item_url(obj.get("url") or "")
 
 
+def key_from_api_entry(obj: dict) -> Optional[str]:
+    """Archive key (``zhihu:<type>:<id>``) for a listing-API entry, or None.
+
+    Matches :pyattr:`~zarchiver.models.ArchiveItem.key` so callers can test an
+    entry against the store before building the full item — the API ``type``
+    values (``answer``/``article``/``pin``) are exactly the
+    :class:`~zarchiver.models.ContentType` values. Returns None for entries
+    without a recognized type or id.
+    """
+    kind = obj.get("type")
+    oid = str(obj.get("id") or "")
+    if kind in ("answer", "article", "pin") and oid:
+        return f"{PLATFORM}:{kind}:{oid}"
+    return None
+
+
 def item_from_api_entry(
     obj: dict, *, video_resolver: Optional["VideoResolver"] = None
 ) -> Optional[ArchiveItem]:

@@ -99,6 +99,13 @@ Options:
   images, or writing anything. The batch listing is still loaded (so zarchiver
   knows what's there), but no per-item work happens — a fast way to preview a
   re-run before spending crawl time and API tokens.
+- `--incremental` / `--full` — for collection/column batches, `--incremental`
+  stops walking the listing once it reaches items already archived (the listing
+  is newest-first), so re-archiving a growing collection only fetches the new
+  items. `--full` forces a complete walk. Overrides `archive.incremental`. Note
+  it won't pick up *edits* to already-archived items (run a full pass with
+  `--on-duplicate update` for that), and it has no effect on question batches,
+  whose answers are ordered by vote rather than time.
 
 For batch URLs, zarchiver loads all entries — columns (专栏) and collections
 (收藏夹) via their JSON list APIs, questions by scrolling — then archives each
