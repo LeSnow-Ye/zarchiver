@@ -204,6 +204,40 @@ def test_obsidian_escapes_literal_bracket_emoji_text(tmp_path):
     assert "[普通链接](https://example.com)" in body
 
 
+def test_obsidian_does_not_escape_code_block_text(tmp_path):
+    cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=False)
+    item = _sample_item()
+    item.content_html = (
+        "<pre><code>items[0] # keep literal</code></pre>"
+        "<p><code>inline[1] # literal</code></p>"
+    )
+    body = (
+        ObsidianExporter(cfg)
+        .export(item)
+        .path.read_text(encoding="utf-8")
+        .split("---\n", 2)[2]
+    )
+
+    assert "items[0] # keep literal" in body
+    assert "items\\[0\\] \\# keep literal" not in body
+    assert "`inline[1] # literal`" in body
+    assert "`inline\\[1\\] \\# literal`" not in body
+
+
+def test_obsidian_escapes_hash_in_body_text(tmp_path):
+    cfg = ObsidianConfig(vault_path=str(tmp_path / "v"), download_images=False)
+    item = _sample_item()
+    item.content_html = '<p>#话题 正文中的 #hashtag 需要转义</p>'
+    body = (
+        ObsidianExporter(cfg)
+        .export(item)
+        .path.read_text(encoding="utf-8")
+        .split("---\n", 2)[2]
+    )
+
+    assert "\\#话题 正文中的 \\#hashtag 需要转义" in body
+
+
 # ---------------------------------------------------------------------- #
 # Formulas
 # ---------------------------------------------------------------------- #
@@ -546,6 +580,4 @@ def test_obsidian_video_link_when_remote(tmp_path):
     # Remote video survives as a link rather than being dropped by markdownify.
     assert "https://v/clip.mp4" in body
     assert "🎬" in body
-
-
 
