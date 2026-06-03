@@ -129,6 +129,10 @@ class ArchiveConfig:
     # page. Pages are still opened as a fallback when the API entry lacks
     # usable content. Set False to force the old open-every-page behavior.
     prefer_api_content: bool = True
+    # How many of an item's images/videos to download in parallel. Downloads are
+    # network-bound, so a small pool speeds up image-heavy items; the fetches run
+    # concurrently while files are written serially. 1 = fully sequential.
+    download_concurrency: int = 4
 
 
 @dataclass
@@ -183,6 +187,11 @@ class Config:
         if v := env.get("ZARCHIVER_MAX_ASSET_RETRIES"):
             try:
                 self.archive.max_asset_retries = max(0, int(v.strip()))
+            except ValueError:
+                pass  # ignore a malformed override, keep the configured value
+        if v := env.get("ZARCHIVER_DOWNLOAD_CONCURRENCY"):
+            try:
+                self.archive.download_concurrency = max(1, int(v.strip()))
             except ValueError:
                 pass  # ignore a malformed override, keep the configured value
         if (v := env.get("ZARCHIVER_PREFER_API_CONTENT")) is not None:

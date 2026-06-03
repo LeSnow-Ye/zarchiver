@@ -122,43 +122,75 @@ def download_images(
     pairs: list[tuple[str, str]],
     dest_dir: Path,
     fetch: Fetcher,
+    *,
+    concurrency: int = 1,
 ) -> DownloadOutcome:
     """Download each (url, filename) into ``dest_dir``.
 
     Returns downloaded/cached assets plus classified misses. Saved filenames may
     have a corrected extension from the downloaded content type.
+
+    With ``concurrency > 1``, the (network-bound) ``fetch`` calls run on a thread
+    pool, but results are written to disk and aggregated on the calling thread —
+    so the bookkeeping stays race-free and each distinct hash filename is written
+    once. ``fetch`` must be safe to call concurrently (the pipeline's httpx-based
+    fetcher is). Order of the returned maps is not significant.
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
     saved: dict[str, str] = {}
     oversized: list[str] = []
     failed_urls: list[str] = []
     cached = downloaded = 0
+
+    # Skip URLs already on disk (the previous behavior's fast path), and collect
+    # the rest to fetch. De-dup by filename so the same asset isn't fetched twice.
+    to_fetch: list[tuple[str, str]] = []
+    seen_fnames: set[str] = set()
     for url, fname in pairs:
         target = dest_dir / fname
         if target.exists() and target.stat().st_size > 0:
             saved[url] = fname
             cached += 1
             continue
+        if fname in seen_fnames:
+            continue
+        seen_fnames.add(fname)
+        to_fetch.append((url, fname))
 
-        fetched = fetch(url)
+    def _store(url: str, fname: str, fetched: FetchResult) -> None:
+        nonlocal downloaded
         if fetched.status == FetchStatus.TOO_LARGE:
             oversized.append(url)
             log.debug("image too large, keeping remote URL: %s", url)
-            continue
+            return
         if fetched.status != FetchStatus.OK or not fetched.data:
             failed_urls.append(url)
             log.debug("image download failed: %s", url)
-            continue
-
+            return
         data = fetched.data
         # Fix missing extension from content if needed.
-        if not Path(fname).suffix:
+        local = fname
+        if not Path(local).suffix:
             ext = _sniff_ext(data) or ".jpg"
-            fname = fname + ext
-            target = dest_dir / fname
-        target.write_bytes(data)
-        saved[url] = fname
+            local = local + ext
+        (dest_dir / local).write_bytes(data)
+        saved[url] = local
         downloaded += 1
+
+    workers = max(1, int(concurrency))
+    if workers == 1 or len(to_fetch) <= 1:
+        for url, fname in to_fetch:
+            _store(url, fname, fetch(url))
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(workers, len(to_fetch))) as pool:
+            # Map preserves input order; fetch() runs concurrently, while every
+            # _store (disk write + bookkeeping) runs here on one thread.
+            results = list(pool.map(lambda uf: fetch(uf[0]), to_fetch))
+        for (url, fname), fetched in zip(to_fetch, results):
+            _store(url, fname, fetched)
+
     if pairs:
         failed = len(failed_urls)
         too_large = len(oversized)

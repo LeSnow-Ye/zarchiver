@@ -179,6 +179,7 @@ def _build_pipeline(
         fetch=fetch,
         summarizer=summarizer,
         download_images=cfg.obsidian.download_images or not cfg.html.embed_images,
+        download_concurrency=cfg.archive.download_concurrency,
     )
 
     def ask(item) -> bool:

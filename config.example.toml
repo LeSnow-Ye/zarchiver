@@ -14,6 +14,7 @@
 #   ZARCHIVER_VIDEO_QUALITY -> archive.video_quality (FHD|HD|SD|LD)
 #   ZARCHIVER_MAX_ASSET_MB -> archive.max_asset_mb (number; 0 disables the limit)
 #   ZARCHIVER_MAX_ASSET_RETRIES -> archive.max_asset_retries (integer; 0 disables retries)
+#   ZARCHIVER_DOWNLOAD_CONCURRENCY -> archive.download_concurrency (integer >= 1)
 #   ZARCHIVER_PREFER_API_CONTENT -> archive.prefer_api_content ("1"/"true"/"0"/"false")
 #   ZARCHIVER_HEADLESS    -> browser.headless ("1"/"true" to force headless)
 
@@ -55,6 +56,10 @@ max_asset_retries = 2
 # Pages are still opened as a fallback when an API entry lacks usable content.
 # Set false to force the old "open every page" behavior.
 prefer_api_content = true
+# How many of an item's images/videos to download in parallel. Downloads are
+# network-bound, so a small pool noticeably speeds up image-heavy items. Set 1
+# for fully sequential downloads.
+download_concurrency = 4
 
 [browser]
 # On a real headless server, run the CLI under `xvfb-run`.

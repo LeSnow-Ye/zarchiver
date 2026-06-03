@@ -199,3 +199,62 @@ def test_download_images_cached_files_count_as_saved(tmp_path):
     assert outcome.saved == {"https://x/cached.jpg": "cached.jpg"}
     assert outcome.oversized == []
     assert outcome.failed == []
+
+
+def test_download_images_concurrent_saves_all(tmp_path):
+    pairs = [(f"https://x/img{i}", f"img{i}.png") for i in range(10)]
+
+    def fetch(url):
+        return FetchResult(FetchStatus.OK, PNG)
+
+    outcome = download_images(pairs, tmp_path, fetch, concurrency=4)
+
+    # All ten land on disk; saved maps every URL (order-independent).
+    assert set(outcome.saved) == {u for u, _ in pairs}
+    assert outcome.oversized == []
+    assert outcome.failed == []
+    for _, fname in pairs:
+        assert (tmp_path / fname).is_file()
+
+
+def test_download_images_concurrent_classifies_mixed_results(tmp_path):
+    results = {
+        "https://x/ok": FetchResult(FetchStatus.OK, PNG),
+        "https://x/too-large": FetchResult(FetchStatus.TOO_LARGE),
+        "https://x/failed": FetchResult(FetchStatus.FAILED),
+    }
+
+    def fetch(url):
+        return results[url]
+
+    outcome = download_images(
+        [
+            ("https://x/ok", "ok.png"),
+            ("https://x/too-large", "too-large.jpg"),
+            ("https://x/failed", "failed.jpg"),
+        ],
+        tmp_path,
+        fetch,
+        concurrency=3,
+    )
+
+    assert outcome.saved == {"https://x/ok": "ok.png"}
+    assert set(outcome.oversized) == {"https://x/too-large"}
+    assert set(outcome.failed) == {"https://x/failed"}
+
+
+def test_download_images_concurrent_runs_fetches_in_parallel(tmp_path):
+    # A barrier proves the fetches overlap: each of the 4 fetchers waits for all
+    # 4 to arrive. With concurrency=1 this would deadlock (timeout); concurrency
+    # >= 4 lets them proceed together.
+    import threading
+
+    barrier = threading.Barrier(4, timeout=5)
+    pairs = [(f"https://x/p{i}", f"p{i}.png") for i in range(4)]
+
+    def fetch(url):
+        barrier.wait()  # raises BrokenBarrierError on timeout if not parallel
+        return FetchResult(FetchStatus.OK, PNG)
+
+    outcome = download_images(pairs, tmp_path, fetch, concurrency=4)
+    assert set(outcome.saved) == {u for u, _ in pairs}

@@ -60,12 +60,14 @@ class Ingestor:
         fetch: Optional[Fetcher] = None,
         summarizer: Optional[Summarizer] = None,
         download_images: bool = True,
+        download_concurrency: int = 1,
     ):
         self.store = store
         self.assets_root = Path(assets_root)
         self._fetch = fetch
         self.summarizer = summarizer
         self._download_images = download_images
+        self._download_concurrency = max(1, int(download_concurrency))
 
     # ------------------------------------------------------------------ #
     def ingest(self, item: ArchiveItem) -> ArchiveItem:
@@ -108,7 +110,9 @@ class Ingestor:
 
         dest = self.assets_root / safe_key(item.key)
         pairs = [(u, filename_for(u)) for u in urls]
-        outcome = download_images(pairs, dest, self._fetch)
+        outcome = download_images(
+            pairs, dest, self._fetch, concurrency=self._download_concurrency
+        )
 
         prefix = safe_key(item.key)
         item.asset_map = {
