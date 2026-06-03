@@ -198,6 +198,47 @@ def test_source_error_reported(tmp_path, store):
     assert "boom" in out.detail
 
 
+# ---------------------------------------------------------------------- #
+# Dry run
+# ---------------------------------------------------------------------- #
+def test_dry_run_new_item_plans_archive_without_writing(tmp_path, store):
+    exp = RecordingExporter(tmp_path)
+    p = _pipeline(Config(), _item(), [exp], store, tmp_path, dry_run=True)
+    out = p.archive_url("u")
+    assert out.action == Action.ARCHIVED  # would archive
+    assert out.detail == "new"
+    # Nothing written or enriched.
+    assert store.count() == 0
+    assert len(exp.exported) == 0
+    assert p.source.enrich_calls == 0
+
+
+def test_dry_run_existing_item_plans_skip(tmp_path, store):
+    item = _item()
+    # First, really archive it (no dry run).
+    _pipeline(Config(), item, [], store, tmp_path).archive_url("u")
+    assert store.count() == 1
+    # Now a dry run on the same content: skip policy → planned skip.
+    cfg = Config()
+    cfg.archive.on_duplicate = "skip"
+    p = _pipeline(cfg, item, [], store, tmp_path, dry_run=True)
+    out = p.archive_url("u")
+    assert out.action == Action.SKIPPED
+    assert out.detail == "unchanged"
+
+
+def test_dry_run_existing_item_update_policy_plans_update(tmp_path, store):
+    item = _item()
+    _pipeline(Config(), item, [], store, tmp_path).archive_url("u")
+    cfg = Config()
+    cfg.archive.on_duplicate = "update"
+    p = _pipeline(cfg, item, [], store, tmp_path, dry_run=True)
+    out = p.archive_url("u")
+    assert out.action == Action.UPDATED
+    # Still no second write happened in the plan.
+    assert store.count() == 1
+
+
 def test_exporter_failure_does_not_crash(tmp_path, store):
     class BadExporter(Exporter):
         name = "bad"

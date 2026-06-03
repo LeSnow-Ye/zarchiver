@@ -94,6 +94,11 @@ Options:
   exporter; useful for bulk-collecting, then exporting in one pass later.
 - `--no-videos` — don't download embedded videos (keep a poster + link instead).
 - `--video-quality FHD|HD|SD|LD` — preferred video quality (default FHD).
+- `--dry-run` — classify each item against the DB and print the plan (would
+  archive / update / skip) without fetching content, running AI, downloading
+  images, or writing anything. The batch listing is still loaded (so zarchiver
+  knows what's there), but no per-item work happens — a fast way to preview a
+  re-run before spending crawl time and API tokens.
 
 For batch URLs, zarchiver loads all entries — columns (专栏) and collections
 (收藏夹) via their JSON list APIs, questions by scrolling — then archives each

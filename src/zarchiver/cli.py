@@ -147,10 +147,20 @@ def _build_pipeline(
     subdir: Optional[str] = None,
     *,
     auto_export: bool = True,
+    dry_run: bool = False,
 ):
     from zarchiver.store import StateStore
 
     store = StateStore(cfg.archive.db_path)
+    # A dry run only classifies items against the DB, so skip the costly setup
+    # (image fetcher, LLM provider, exporters) entirely.
+    if dry_run:
+        ingestor = Ingestor(store, assets_root=cfg.archive.assets_root, fetch=None)
+        pipeline = Pipeline(
+            cfg, source, [], store, ingestor, auto_export=False, dry_run=True,
+        )
+        return pipeline, store
+
     fetch = make_image_fetcher(cfg)
     summarizer = _build_summarizer(cfg)
 
@@ -186,7 +196,7 @@ def _build_pipeline(
     return pipeline, store
 
 
-def _report(outcomes: list[ItemOutcome]) -> None:
+def _report(outcomes: list[ItemOutcome], *, dry_run: bool = False) -> None:
     counts = {a: 0 for a in Action}
     asset_issues: Counter[str] = Counter()
     for o in outcomes:
@@ -196,6 +206,17 @@ def _report(outcomes: list[ItemOutcome]) -> None:
     for o in outcomes:
         if o.action == Action.FAILED:
             log.error("FAILED %s: %s", o.url, o.detail)
+    if dry_run:
+        # A plan: report only the would-be actions, no asset/export counts.
+        parts = [
+            f"[green]{counts[Action.ARCHIVED]} to archive[/green]",
+            f"[cyan]{counts[Action.UPDATED]} to update[/cyan]",
+            f"[dim]{counts[Action.SKIPPED]} to skip[/dim]",
+        ]
+        if counts[Action.FAILED]:
+            parts.append(f"[red]{counts[Action.FAILED]} failed[/red]")
+        out.print("Would: " + ", ".join(parts) + " [dim](dry run; nothing written)[/dim]")
+        return
     parts = [
         f"[green]{counts[Action.ARCHIVED]} archived[/green]",
         f"[cyan]{counts[Action.UPDATED]} updated[/cyan]",
@@ -304,6 +325,12 @@ def archive(
         "--video-quality",
         help="Preferred video quality: FHD | HD | SD | LD (default FHD).",
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be archived/updated/skipped against the DB, "
+        "without fetching content, running AI, or writing anything.",
+    ),
 ):
     """Archive a single answer/article, or a batch (collection/column/question).
 
@@ -313,6 +340,11 @@ def archive(
     answers/articles are archived directly; collection, column, and question
     URLs are batch-archived, each item going into a subdirectory named after the
     batch by default.
+
+    With ``--dry-run``, items are classified against the DB and the plan is
+    printed (would archive / update / skip) without enriching, downloading,
+    summarizing, or writing. Listing the batch still loads its entries to know
+    what's there, but no per-item content work happens.
     """
     cfg = _load_config(config, no_ai, on_duplicate)
     if limit:
@@ -328,14 +360,14 @@ def archive(
     target = classify(url)
     source = ZhihuSource(cfg)
     pipeline, store = _build_pipeline(
-        cfg, source, subdir=subdir, auto_export=not no_export
+        cfg, source, subdir=subdir, auto_export=not no_export, dry_run=dry_run
     )
     try:
         if target.is_batch:
             outcomes = pipeline.archive_batch(url)
         else:
             outcomes = [pipeline.archive_url(url)]
-        _report(outcomes)
+        _report(outcomes, dry_run=dry_run)
     finally:
         source.close()
         store.close()

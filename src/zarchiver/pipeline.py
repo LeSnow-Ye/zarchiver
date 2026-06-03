@@ -171,6 +171,7 @@ class Pipeline:
         *,
         auto_export: bool = True,
         duplicate_prompt: Optional[DuplicatePrompt] = None,
+        dry_run: bool = False,
         progress: Optional[Progress] = None,
     ):
         self.config = config
@@ -180,6 +181,7 @@ class Pipeline:
         self.ingestor = ingestor
         self.auto_export = auto_export
         self.duplicate_prompt = duplicate_prompt
+        self.dry_run = dry_run
         self._progress = progress or (lambda msg: None)
 
     # ------------------------------------------------------------------ #
@@ -212,6 +214,14 @@ class Pipeline:
         # Dedup against the DB by content_hash (not the filesystem).
         status = self.store.status_for(item)
         exists = status != "new"
+
+        if self.dry_run:
+            # Report what would happen without enriching, ingesting, or writing.
+            # The "ask" policy is treated as "update" here (no prompt in a plan).
+            planned = self._plan(exists)
+            self._progress(f"{planned.value:8} {item.title}")
+            return ItemOutcome(item, planned, url=item.url, detail=status)
+
         action = self._decide(item, exists)
         if action is None:
             log.info("skip (%s): %r", status, item.title)
@@ -259,6 +269,19 @@ class Pipeline:
             return Action.UPDATED if self.duplicate_prompt(item) else None
         # Default "skip".
         return None
+
+    def _plan(self, exists: bool) -> Action:
+        """Non-interactive prediction of the action, for ``--dry-run``.
+
+        Mirrors :meth:`_decide` but never prompts: under the ``ask`` policy an
+        existing item is reported as ``UPDATED`` (the answer can't be known
+        without prompting, and a plan shouldn't ask).
+        """
+        if not exists:
+            return Action.ARCHIVED
+        if self.config.archive.on_duplicate == "skip":
+            return Action.SKIPPED
+        return Action.UPDATED
 
 
 def make_image_fetcher(
