@@ -162,6 +162,35 @@ case a video degrades to its poster image plus a link. If a video can't be
 resolved, it also falls back to the poster + link. All downloading happens at
 archive time; `export` stays fully offline.
 
+## `refresh`
+
+Re-walk every batch you've already archived and pull in new items — a single
+command to keep all your tracked sources up to date. It goes through each
+distinct collection (收藏夹), column (专栏), and question recorded in the
+database and re-runs its batch archive.
+
+```bash
+uv run zarchiver refresh                       # new items in every known batch
+uv run zarchiver refresh --full                # re-walk each batch completely
+uv run zarchiver refresh --full --on-duplicate update  # also re-fetch edits
+uv run zarchiver refresh --dry-run             # preview what each batch would do
+```
+
+By default the walk is **incremental**: for collections and columns it stops
+once it reaches items already archived (the listing is newest-first), so only
+new items are fetched. This makes periodic refreshing cheap. Pass `--full` to
+re-walk each batch completely; combine it with `--on-duplicate update` to also
+re-fetch *edits* to already-archived items (incremental mode won't pick those
+up). Questions are always walked in full — their answers are vote-ordered, not
+chronological — and re-archived per the duplicate policy.
+
+Options mirror `archive`: `--full`/`--incremental`, `--on-duplicate`, `--no-ai`,
+`--no-comments`, `--limit/-n` (per batch), `--no-export`, `--dry-run`.
+
+> Items archived directly from a single URL (not part of a batch) are not
+> refreshed, since the archive doesn't record them as an ongoing source. Re-run
+> `archive <url>` for those (with `--on-duplicate update` to catch edits).
+
 ## `export`
 
 Render already-archived items from the database — **fully offline**. It reads
@@ -222,6 +251,65 @@ Options:
 Each item costs one LLM call, so `reai` confirms before running unless you pass
 `--yes`. It needs AI configured (`[ai].enabled` and an API key); without that it
 exits with a clear error.
+
+## `retry-assets`
+
+Re-download images and videos that failed or were skipped at archive time.
+Assets that fail to download, or exceed `archive.max_asset_mb`, aren't stored
+locally — the content keeps the original remote link and the miss is recorded on
+the item. This command re-fetches just those misses, without re-fetching content
+or running AI.
+
+```bash
+uv run zarchiver retry-assets                  # all items with recorded issues
+uv run zarchiver retry-assets --key zhihu:article:35562420  # one item
+uv run zarchiver retry-assets --type article   # only articles with issues
+uv run zarchiver retry-assets -e               # re-render affected items after
+uv run zarchiver retry-assets --all            # re-check every item's assets
+```
+
+The download is idempotent: assets already on disk are kept, only the missing
+URLs are pulled, and over-size skips are re-judged against the **current** limit.
+So the common workflow is to raise `archive.max_asset_mb` (or fix a flaky
+network), then run `retry-assets` to fill in what was missed.
+
+Options:
+- `--key platform:type:id` — retry a single item.
+- `--type answer|article|pin` — filter by content type.
+- `--all` — consider every item, not just those with recorded issues (useful if
+  stored files were deleted on disk).
+- `--limit/-n N` — cap how many items (0 = all).
+- `--export/-e` — re-render the affected items so exported copies pick up the
+  newly downloaded assets.
+
+It reports how many assets were recovered versus still missing. Needs network
+access to fetch the assets.
+
+## `rm`
+
+Delete archived item(s) from the database and their stored assets.
+
+```bash
+uv run zarchiver rm --key zhihu:article:35562420     # one item (asks to confirm)
+uv run zarchiver rm --type pin -y                     # all pins, no prompt
+uv run zarchiver rm --key zhihu:article:35562420 --exports   # also delete output
+```
+
+Removes each selected item from the database (the system of record) and deletes
+its asset directory under `archive.assets_root`. By default, **exported** notes
+and HTML pages are left in place — they live in your vault / output dirs and can
+be regenerated. Pass `--exports` to also delete the item's Obsidian note and HTML
+page.
+
+A selector is **required** — `--key` for one item, or `--type` for all items of
+a content type. `rm` never deletes the whole archive in a single call. Because
+deletion can't be undone, it confirms first unless `--yes/-y` is given.
+
+Options:
+- `--key platform:type:id` — delete a single item.
+- `--type answer|article|pin` — delete every item of this content type.
+- `--exports` — also delete exported Obsidian/HTML files when they exist.
+- `--yes/-y` — skip the confirmation prompt.
 
 ## `status`
 

@@ -5,8 +5,13 @@ Commands:
 * ``login``       — open a browser, log in to Zhihu once, save the session.
 * ``archive URL`` — archive a single answer/article/pin, or a batch (collection,
   column, or question); the URL kind is auto-detected.
+* ``refresh``     — re-walk every collection/column/question already archived and
+  pull in new items (incremental by default).
 * ``export``      — re-render already-archived items from the DB, fully offline.
 * ``reai``        — regenerate AI summaries/tags/category for archived items.
+* ``retry-assets``— re-download images/videos that failed or were skipped
+  (e.g. after raising the size limit).
+* ``rm``          — delete archived item(s) from the DB and their stored assets.
 * ``status``      — show how many items are archived and the most recent ones.
 
 Everything is driven by ``config.toml`` (see ``config.example.toml``); flags on
@@ -37,6 +42,7 @@ from zarchiver.pipeline import (
     export_items,
     make_image_fetcher,
     resummarize_items,
+    retry_item_assets,
 )
 from zarchiver.sources.zhihu import ZhihuSource
 from zarchiver.sources.zhihu.browser import ZhihuBrowser
@@ -386,6 +392,93 @@ def archive(
 
 
 @app.command()
+def refresh(
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+    full: bool = typer.Option(
+        False,
+        "--full/--incremental",
+        help="Re-walk each batch completely instead of stopping at items already "
+        "archived. Combine with --on-duplicate update to also re-fetch edits to "
+        "existing items. Default is incremental (new items only).",
+    ),
+    on_duplicate: Optional[str] = typer.Option(
+        None, "--on-duplicate", help="skip | update | ask"
+    ),
+    no_ai: bool = typer.Option(False, "--no-ai", help="Disable AI summarization"),
+    no_comments: bool = typer.Option(
+        False, "--no-comments", help="Do not record comments for this run"
+    ),
+    limit: int = typer.Option(
+        0, "--limit", "-n", help="Max items per batch (0 = all)"
+    ),
+    no_export: bool = typer.Option(
+        False, "--no-export", help="Ingest new items but skip exporting."
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what each known batch would archive/update/skip without "
+        "fetching content, running AI, or writing anything.",
+    ),
+):
+    """Re-walk every batch already archived and pull in new items.
+
+    Goes through each distinct collection (收藏夹), column (专栏), and question
+    recorded in the database and re-runs its batch archive — so a single command
+    keeps every source you've archived up to date. By default the walk is
+    *incremental*: for collections/columns it stops once it reaches items already
+    archived (the listing is newest-first), fetching only what's new. Pass
+    ``--full`` to re-walk completely; add ``--on-duplicate update`` to also
+    re-fetch edits to already-archived items. Questions are always walked in full
+    (their answers are vote-ordered, not chronological).
+
+    Items archived directly from a single URL (not part of a batch) are not
+    refreshed — re-run ``archive <url>`` for those.
+    """
+    cfg = _load_config(config, no_ai, on_duplicate)
+    if limit:
+        cfg.browser.max_items = limit
+    if no_comments:
+        cfg.archive.comments = False
+    # Incremental unless --full; overrides whatever the config default is.
+    cfg.archive.incremental = not full
+
+    from zarchiver.store import StateStore
+
+    probe = StateStore(cfg.archive.db_path)
+    try:
+        batches = probe.distinct_batches()
+    finally:
+        probe.close()
+
+    if not batches:
+        out.print(
+            "[yellow]No batch-archived sources found in the database.[/yellow] "
+            "Refresh re-walks collections/columns/questions; archive one first."
+        )
+        return
+
+    out.print(
+        f"Refreshing [bold]{len(batches)}[/bold] batch(es) "
+        f"({'full' if full else 'incremental'})."
+    )
+
+    source = ZhihuSource(cfg)
+    pipeline, store = _build_pipeline(
+        cfg, source, auto_export=not no_export, dry_run=dry_run
+    )
+    outcomes: list[ItemOutcome] = []
+    try:
+        for batch in batches:
+            log.info("refresh %s: %s", batch.kind.value, batch.title)
+            outcomes.extend(pipeline.archive_batch(batch.url))
+        _report(outcomes, dry_run=dry_run)
+    finally:
+        source.close()
+        store.close()
+
+
+@app.command()
 def export(
     config: Optional[str] = typer.Option(None, "--config", "-c"),
     key: Optional[str] = typer.Option(
@@ -527,6 +620,200 @@ def reai(
                         progress=lambda msg: log.info("%s", msg),
                     )
         _report(outcomes)
+    finally:
+        store.close()
+
+
+@app.command(name="retry-assets")
+def retry_assets(
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+    key: Optional[str] = typer.Option(
+        None, "--key", help="Retry assets for only the item with this key."
+    ),
+    content_type: Optional[str] = typer.Option(
+        None, "--type", help="Filter by content type: answer | article | pin."
+    ),
+    all_items: bool = typer.Option(
+        False,
+        "--all",
+        help="Consider every item, not just those with recorded asset issues "
+        "(re-checks all items for missing local files).",
+    ),
+    limit: int = typer.Option(0, "--limit", "-n", help="Max items (0 = all)."),
+    export: bool = typer.Option(
+        False,
+        "--export",
+        "-e",
+        help="Re-render affected items after retrying, so exported copies pick "
+        "up the newly downloaded assets.",
+    ),
+):
+    """Re-download images/videos that failed or were skipped at archive time.
+
+    Assets that fail to download, or exceed ``archive.max_asset_mb``, are not
+    stored locally — the content keeps the original remote link and the miss is
+    recorded on the item. This command re-fetches just those: assets already on
+    disk are kept, only the missing URLs are pulled, and over-size skips are
+    re-judged against the *current* limit. So after raising
+    ``archive.max_asset_mb`` (or fixing a flaky network), ``retry-assets`` fills
+    in what was missed — no full re-archive, no re-fetch of content.
+
+    By default it only looks at items with recorded asset issues; ``--all``
+    re-checks every item (useful if stored files were deleted). Needs network
+    access to fetch the assets; it never re-fetches content or runs AI.
+    """
+    from zarchiver.store import StateStore
+
+    cfg = Config.load(config)
+    store = StateStore(cfg.archive.db_path)
+    try:
+        if key:
+            item = store.load_item(key)
+            items = [item] if item is not None else []
+            if not items:
+                out.print(f"[red]No archived item with key {key}.[/red]")
+                return
+        else:
+            items = list(
+                store.iter_items(
+                    content_type=content_type,
+                    with_asset_issues=not all_items,
+                    limit=limit,
+                )
+            )
+        if not items:
+            out.print(
+                "[green]No items with missing assets.[/green]"
+                if not all_items
+                else "[yellow]No matching items.[/yellow]"
+            )
+            return
+
+        fetch = make_image_fetcher(cfg)
+        ingestor = Ingestor(
+            store,
+            assets_root=cfg.archive.assets_root,
+            fetch=fetch,
+            summarizer=None,  # never re-run AI here
+            download_images=True,  # force on regardless of exporter config
+            download_concurrency=cfg.archive.download_concurrency,
+        )
+        outcomes = retry_item_assets(
+            items, ingestor, progress=lambda msg: log.info("%s", msg)
+        )
+        recovered = sum(o.recovered for o in outcomes)
+        remaining = sum(o.remaining for o in outcomes)
+        failed = sum(1 for o in outcomes if o.failed)
+        parts = [f"[green]{recovered} asset(s) recovered[/green]"]
+        if remaining:
+            parts.append(f"[yellow]{remaining} still missing[/yellow]")
+        if failed:
+            parts.append(f"[red]{failed} item(s) failed[/red]")
+        out.print(f"Done over {len(outcomes)} item(s): " + ", ".join(parts))
+
+        if export and recovered:
+            done = [o.item for o in outcomes if o.recovered]
+            exporters = _build_exporters(cfg)
+            if exporters and done:
+                export_items(
+                    done, exporters, progress=lambda msg: log.info("%s", msg)
+                )
+                out.print(f"Re-rendered {len(done)} item(s).")
+    finally:
+        store.close()
+
+
+@app.command()
+def rm(
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+    key: Optional[str] = typer.Option(
+        None, "--key", help="Delete the single item with this key (platform:type:id)."
+    ),
+    content_type: Optional[str] = typer.Option(
+        None, "--type", help="Delete every item of this content type: answer | "
+        "article | pin.",
+    ),
+    exports: bool = typer.Option(
+        False,
+        "--exports",
+        help="Also delete the item's exported Obsidian note and HTML page "
+        "(when they exist). Off by default — only the DB record and stored "
+        "assets are removed.",
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt."
+    ),
+):
+    """Delete archived item(s): the database record and their stored assets.
+
+    Removes each selected item from the database (the system of record) and
+    deletes its asset directory under ``archive.assets_root``. Exported notes /
+    HTML pages are left in place unless ``--exports`` is given, since they live
+    in your vault/output dirs and can be regenerated. A selector is required
+    (``--key`` for one item, or ``--type`` for all of a content type) — ``rm``
+    never deletes the whole archive in one call. This is destructive, so it
+    confirms first unless ``--yes`` is passed.
+    """
+    import shutil
+    from pathlib import Path
+
+    from zarchiver.ingest import safe_key
+    from zarchiver.store import StateStore
+
+    if not key and not content_type:
+        out.print(
+            "[red]Refusing to delete without a selector.[/red] Pass --key "
+            "<platform:type:id> for one item, or --type <answer|article|pin> "
+            "to delete all of a type."
+        )
+        raise typer.Exit(code=2)
+
+    cfg = Config.load(config)
+    store = StateStore(cfg.archive.db_path)
+    try:
+        if key:
+            item = store.load_item(key)
+            items = [item] if item is not None else []
+            if not items:
+                out.print(f"[red]No archived item with key {key}.[/red]")
+                return
+        else:
+            items = list(store.iter_items(content_type=content_type))
+        if not items:
+            out.print("[yellow]No matching items to delete.[/yellow]")
+            return
+
+        scope = "the DB record + stored assets"
+        if exports:
+            scope += " + exported notes/HTML"
+        if not yes:
+            ok = typer.confirm(
+                f"Delete {len(items)} item(s) and {scope}? This cannot be undone."
+            )
+            if not ok:
+                out.print("Aborted.")
+                return
+
+        assets_root = Path(cfg.archive.assets_root)
+        exporters = _build_exporters(cfg) if exports else []
+        removed = 0
+        for item in items:
+            # Stored assets for this item live in one per-key directory.
+            asset_dir = assets_root / safe_key(item.key)
+            if asset_dir.is_dir():
+                shutil.rmtree(asset_dir, ignore_errors=True)
+            if exports:
+                for exporter in exporters:
+                    path = exporter.target_path(item)
+                    if path is not None and path.exists():
+                        try:
+                            path.unlink()
+                        except OSError as exc:
+                            log.warning("could not delete %s: %s", path, exc)
+            if store.delete_item(item.key):
+                removed += 1
+            log.info("removed %s: %r", item.key, item.title)
+        out.print(f"Deleted [bold]{removed}[/bold] item(s).")
     finally:
         store.close()
 

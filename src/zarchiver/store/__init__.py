@@ -16,12 +16,13 @@ rewrite ``<img>`` offline and reports can distinguish skipped/failed assets.
 from __future__ import annotations
 
 import sqlite3
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
-from zarchiver.models import ArchiveItem
-from zarchiver.serialize import item_from_row, row_from_item
+from zarchiver.models import ArchiveItem, BatchInfo
+from zarchiver.serialize import batch_from_dict, item_from_row, row_from_item
 
 SCHEMA_VERSION = 2
 
@@ -157,17 +158,63 @@ class StateStore:
         row = self.get_record(key)
         return item_from_row(row) if row is not None else None
 
+    def delete_item(self, key: str) -> bool:
+        """Delete the item with ``key`` from the store.
+
+        Returns True if a row was removed, False if no such item existed. Only
+        the DB record is touched here; on-disk assets and exported files are the
+        caller's responsibility (the store doesn't own them).
+        """
+        cur = self._conn.execute("DELETE FROM items WHERE key = ?", (key,))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def distinct_batches(self) -> list[BatchInfo]:
+        """Every distinct batch (collection/column/question) seen across items.
+
+        Reads the ``batch`` context recorded on each item and returns one
+        :class:`~zarchiver.models.BatchInfo` per distinct batch URL, so callers
+        (e.g. ``refresh``) can re-walk each source. Items archived directly (not
+        via a batch) carry no batch and are excluded. Order follows the
+        most-recently-updated item of each batch.
+        """
+        cur = self._conn.execute(
+            "SELECT batch_json FROM items "
+            "WHERE batch_json IS NOT NULL "
+            "AND batch_json NOT IN ('', 'null') "
+            "ORDER BY updated_at DESC"
+        )
+        out: list[BatchInfo] = []
+        seen: set[str] = set()
+        for row in cur:
+            try:
+                data = json.loads(row["batch_json"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            batch = batch_from_dict(data)
+            if batch is None:
+                continue
+            dedup = batch.url or f"{batch.kind.value}:{batch.id}"
+            if dedup in seen:
+                continue
+            seen.add(dedup)
+            out.append(batch)
+        return out
+
     def iter_items(
         self,
         *,
         content_type: Optional[str] = None,
         since: Optional[str] = None,
+        with_asset_issues: bool = False,
         limit: int = 0,
     ) -> Iterator[ArchiveItem]:
         """Iterate stored items (most-recently-updated first), with filters.
 
         ``content_type`` filters by type value; ``since`` keeps items whose
-        ``updated_at`` is >= the given ISO timestamp; ``limit`` of 0 means all.
+        ``updated_at`` is >= the given ISO timestamp; ``with_asset_issues`` keeps
+        only items that recorded a failed/too-large asset (a non-empty
+        ``asset_issues`` map); ``limit`` of 0 means all.
         """
         clauses = []
         params: list = []
@@ -177,6 +224,12 @@ class StateStore:
         if since:
             clauses.append("updated_at >= ?")
             params.append(since)
+        if with_asset_issues:
+            # A non-empty JSON object: not null, and neither "null" nor "{}".
+            clauses.append(
+                "asset_issues_json IS NOT NULL "
+                "AND asset_issues_json NOT IN ('', 'null', '{}')"
+            )
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"SELECT * FROM items{where} ORDER BY updated_at DESC"
         if limit:

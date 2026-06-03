@@ -193,3 +193,46 @@ def test_ingest_records_oversized_and_failed_asset_issues(tmp_path, store):
         "https://pic1.zhimg.com/c.jpg": "failed",
     }
     assert store.load_item(item.key).asset_issues == item.asset_issues
+
+
+# ---------------------------------------------------------------------- #
+# retry_assets
+# ---------------------------------------------------------------------- #
+def test_retry_assets_recovers_previously_failed(tmp_path, store):
+    item = _item()
+    # First ingest: the only image fails to download.
+    fail = Ingestor(
+        store,
+        assets_root=tmp_path / "a",
+        fetch=lambda u: FetchResult(FetchStatus.FAILED),
+    )
+    fail.ingest(item)
+    assert item.asset_issues == {"https://pic1.zhimg.com/a.jpg": "failed"}
+
+    # Retry with a working fetcher: the asset is recovered, issue cleared.
+    ok = Ingestor(store, assets_root=tmp_path / "a", fetch=ok_fetch)
+    ok.retry_assets(item)
+    assert item.asset_issues == {}
+    assert "https://pic1.zhimg.com/a.jpg" in item.asset_map
+    rel = item.asset_map["https://pic1.zhimg.com/a.jpg"]
+    assert (tmp_path / "a" / rel).is_file()
+    # Refreshed maps persisted.
+    assert store.load_item(item.key).asset_issues == {}
+
+
+def test_retry_assets_keeps_existing_files(tmp_path, store):
+    # An asset already on disk is not re-fetched on retry.
+    item = _item()
+    Ingestor(store, assets_root=tmp_path / "a", fetch=ok_fetch).ingest(item)
+
+    calls = []
+
+    def counting_fetch(url):
+        calls.append(url)
+        return FetchResult(FetchStatus.OK, PNG)
+
+    retry = Ingestor(store, assets_root=tmp_path / "a", fetch=counting_fetch)
+    retry.retry_assets(item)
+    # File already present from the first ingest → no fetch happened.
+    assert calls == []
+    assert "https://pic1.zhimg.com/a.jpg" in item.asset_map

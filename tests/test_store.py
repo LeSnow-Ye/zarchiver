@@ -186,3 +186,87 @@ def test_existing_v1_db_migrates_asset_issues_column(tmp_path):
         assert "ai_cache" not in tables
     finally:
         store.close()
+
+
+# ---------------------------------------------------------------------- #
+# delete_item
+# ---------------------------------------------------------------------- #
+def test_delete_item_removes_row(store):
+    item = _item()
+    store.save_item(item)
+    assert store.count() == 1
+    assert store.delete_item(item.key) is True
+    assert store.count() == 0
+    assert store.load_item(item.key) is None
+
+
+def test_delete_missing_item_returns_false(store):
+    assert store.delete_item("zhihu:article:nope") is False
+
+
+# ---------------------------------------------------------------------- #
+# distinct_batches
+# ---------------------------------------------------------------------- #
+def _batched(source_id, kind, title, url, batch_id):
+    item = _item(source_id)
+    item.batch = BatchInfo(kind=kind, title=title, url=url, id=batch_id)
+    return item
+
+
+def test_distinct_batches_dedupes_by_url(store):
+    # Two items from the same column → one batch entry.
+    store.save_item(
+        _batched("1", BatchKind.COLUMN, "次元壁", "https://col/1", "1")
+    )
+    store.save_item(
+        _batched("2", BatchKind.COLUMN, "次元壁", "https://col/1", "1")
+    )
+    # A different collection → its own entry.
+    store.save_item(
+        _batched("3", BatchKind.COLLECTION, "夹", "https://coll/9", "9")
+    )
+    batches = store.distinct_batches()
+    urls = {b.url for b in batches}
+    assert urls == {"https://col/1", "https://coll/9"}
+    assert len(batches) == 2
+
+
+def test_distinct_batches_excludes_non_batch_items(store):
+    # A directly-archived item carries no batch context.
+    store.save_item(_item("1"))
+    store.save_item(
+        _batched("2", BatchKind.COLLECTION, "夹", "https://coll/9", "9")
+    )
+    batches = store.distinct_batches()
+    assert len(batches) == 1
+    assert batches[0].kind == BatchKind.COLLECTION
+
+
+def test_distinct_batches_empty_when_no_batches(store):
+    store.save_item(_item("1"))
+    assert store.distinct_batches() == []
+
+
+# ---------------------------------------------------------------------- #
+# iter_items: with_asset_issues filter
+# ---------------------------------------------------------------------- #
+def test_iter_items_with_asset_issues_filter(store):
+    clean = _item("1")
+    store.save_item(clean)
+    broken = _item("2")
+    broken.asset_issues = {"https://pic.zhimg.com/x.jpg": "failed"}
+    store.save_item(broken)
+
+    flagged = list(store.iter_items(with_asset_issues=True))
+    assert len(flagged) == 1
+    assert flagged[0].source_id == "2"
+    # Without the filter, both come back.
+    assert len(list(store.iter_items())) == 2
+
+
+def test_iter_items_with_asset_issues_treats_empty_map_as_clean(store):
+    # An item whose asset_issues is an empty dict must not be flagged.
+    item = _item("1")
+    item.asset_issues = {}
+    store.save_item(item)
+    assert list(store.iter_items(with_asset_issues=True)) == []

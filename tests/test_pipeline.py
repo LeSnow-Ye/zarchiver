@@ -6,10 +6,23 @@ from pathlib import Path
 import pytest
 
 from zarchiver.config import Config
+from zarchiver.exporters.assets import FetchResult, FetchStatus
 from zarchiver.exporters.base import Exporter, ExportResult
 from zarchiver.ingest import Ingestor
-from zarchiver.models import AIResult, ArchiveItem, ContentType
-from zarchiver.pipeline import Action, Pipeline, export_items, resummarize_items
+from zarchiver.models import (
+    AIResult,
+    ArchiveItem,
+    BatchInfo,
+    BatchKind,
+    ContentType,
+)
+from zarchiver.pipeline import (
+    Action,
+    Pipeline,
+    export_items,
+    resummarize_items,
+    retry_item_assets,
+)
 from zarchiver.sources.base import Source, SourceError
 from zarchiver.store import StateStore
 
@@ -561,3 +574,126 @@ def test_fetcher_zero_retries_single_attempt(monkeypatch):
     result = fetch("https://pic.zhimg.com/down.jpg")
     assert result.status == FetchStatus.FAILED
     assert attempts == 1
+
+
+# ---------------------------------------------------------------------- #
+# retry_item_assets (retry-assets command)
+# ---------------------------------------------------------------------- #
+def _item_with_image(source_id="1"):
+    return _item(
+        content='<p><img src="https://pic1.zhimg.com/a.jpg"></p>',
+        source_id=source_id,
+    )
+
+
+def test_retry_item_assets_recovers_and_reports(tmp_path, store):
+    item = _item_with_image()
+    # Archive with a failing fetcher → one recorded asset issue.
+    Ingestor(
+        store,
+        assets_root=tmp_path / "a",
+        fetch=lambda u: FetchResult(FetchStatus.FAILED),
+    ).ingest(item)
+    assert len(item.asset_issues) == 1
+
+    # Retry with a working fetcher.
+    PNG = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+        "890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+    )
+    ingestor = Ingestor(
+        store,
+        assets_root=tmp_path / "a",
+        fetch=lambda u: FetchResult(FetchStatus.OK, PNG),
+    )
+    reloaded = store.load_item(item.key)
+    outcomes = retry_item_assets([reloaded], ingestor)
+    assert len(outcomes) == 1
+    assert outcomes[0].recovered == 1
+    assert outcomes[0].remaining == 0
+    assert not outcomes[0].failed
+    # Persisted: the issue is cleared in the DB.
+    assert store.load_item(item.key).asset_issues == {}
+
+
+def test_retry_item_assets_reports_still_missing(tmp_path, store):
+    item = _item_with_image()
+    Ingestor(
+        store,
+        assets_root=tmp_path / "a",
+        fetch=lambda u: FetchResult(FetchStatus.FAILED),
+    ).ingest(item)
+
+    # Retry still fails → reported as remaining, not recovered.
+    ingestor = Ingestor(
+        store,
+        assets_root=tmp_path / "a",
+        fetch=lambda u: FetchResult(FetchStatus.FAILED),
+    )
+    outcomes = retry_item_assets([store.load_item(item.key)], ingestor)
+    assert outcomes[0].recovered == 0
+    assert outcomes[0].remaining == 1
+
+
+def test_retry_item_assets_failure_is_non_fatal(tmp_path, store):
+    class BoomIngestor:
+        def retry_assets(self, item):
+            raise RuntimeError("disk error")
+
+    item = _item_with_image()
+    store.save_item(item)
+    outcomes = retry_item_assets([item], BoomIngestor())
+    assert outcomes[0].failed is True
+    assert "disk error" in outcomes[0].detail
+
+
+# ---------------------------------------------------------------------- #
+# refresh loop (re-walking known batches honours the `known` predicate)
+# ---------------------------------------------------------------------- #
+class BatchSource(Source):
+    """Fake source yielding a fixed batch, honouring the `known` predicate.
+
+    Mirrors how the real Zhihu source skips already-archived items in
+    incremental mode: any item whose key `known(key)` reports is dropped.
+    """
+
+    platform = "zhihu"
+
+    def __init__(self, items):
+        self.items = items
+
+    def supports(self, url):
+        return True
+
+    def fetch(self, url):
+        raise SourceError("single fetch not used in batch test")
+
+    def fetch_batch(self, url, *, known=None):
+        for it in self.items:
+            if known is not None and known(it.key):
+                continue
+            yield it
+
+
+def test_refresh_incremental_skips_known_items(tmp_path, store):
+    # One item already archived; the batch lists it plus a new one.
+    existing = _item(source_id="1")
+    new = _item(source_id="2")
+    for it in (existing, new):
+        it.batch = BatchInfo(
+            kind=BatchKind.COLUMN, title="col", url="https://col/1", id="1"
+        )
+    store.save_item(existing)
+
+    cfg = Config()
+    source = BatchSource([existing, new])
+    ingestor = Ingestor(store, assets_root=tmp_path / "a", fetch=None)
+    pipeline = Pipeline(
+        cfg, source, [], store, ingestor, auto_export=False, incremental=True
+    )
+    outcomes = pipeline.archive_batch("https://col/1")
+    # The known item was filtered by the source; only the new one is processed.
+    assert len(outcomes) == 1
+    assert outcomes[0].item.source_id == "2"
+    assert outcomes[0].action == Action.ARCHIVED
+    assert store.count() == 2

@@ -15,7 +15,10 @@ formats can be added without touching the core.
 Working: single + batch archiving (answers, articles, pins, collections,
 columns, questions), comment recording, a DB-backed archive (full content +
 comments + AI + image asset map), offline Obsidian + HTML export with image
-localization, AI summaries/tags via DeepSeek, and content-hash dedup. See
+localization, AI summaries/tags via DeepSeek, and content-hash dedup. Lifecycle
+commands keep the archive current and tidy: `refresh` (re-walk known batches for
+new items), `retry-assets` (re-fetch images/videos that failed or were skipped),
+and `rm` (delete items and their assets). See
 [docs/architecture.md](docs/architecture.md) for the design,
 [docs/usage.md](docs/usage.md) for commands,
 [docs/configuration.md](docs/configuration.md) for config, and

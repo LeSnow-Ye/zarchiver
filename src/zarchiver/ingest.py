@@ -86,6 +86,30 @@ class Ingestor:
         return item
 
     # ------------------------------------------------------------------ #
+    def retry_assets(self, item: ArchiveItem) -> ArchiveItem:
+        """Re-download an item's missing/oversized assets, then persist.
+
+        Re-runs the same asset collection + download as :meth:`ingest` (no
+        re-fetch of content, no AI). The download is idempotent: assets already
+        on disk are kept via the downloader's fast path, so only the URLs still
+        missing are fetched, and ``too_large`` skips are re-evaluated against the
+        *current* size limit — so raising ``archive.max_asset_mb`` and retrying
+        pulls in assets that were previously skipped. The recomputed
+        ``asset_map``/``asset_issues`` are saved back to the store.
+
+        Returns the item with refreshed asset maps. A no-op (still saves) when
+        image downloading is disabled or no fetcher is configured.
+        """
+        if self._download_images and self._fetch is not None:
+            self._fetch_assets(item)
+        self.store.save_item(item)
+        log.debug(
+            "retried assets for %s (%d stored, %d still missing)",
+            item.key, len(item.asset_map), len(item.asset_issues),
+        )
+        return item
+
+    # ------------------------------------------------------------------ #
     def _fetch_assets(self, item: ArchiveItem) -> None:
         """Collect every image URL on the item and download into its dir."""
         urls: list[str] = []

@@ -53,6 +53,22 @@ class ItemOutcome:
     exports: list[ExportResult] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class AssetRetryOutcome:
+    """Result of retrying one item's missing/oversized assets.
+
+    ``recovered`` is how many assets that were previously failed/too-large are
+    now stored locally; ``remaining`` is how many are still missing after the
+    retry. ``failed`` marks an item whose retry raised (left untouched).
+    """
+
+    item: ArchiveItem
+    recovered: int = 0
+    remaining: int = 0
+    failed: bool = False
+    detail: str = ""
+
+
 # Callback used to resolve "ask" duplicate decisions; returns True to re-archive.
 DuplicatePrompt = Callable[[ArchiveItem], bool]
 Progress = Callable[[str], None]
@@ -154,6 +170,42 @@ def resummarize_items(
             continue
         emit(f"reai   {item.title}")
         outcomes.append(ItemOutcome(item, Action.SUMMARIZED, url=item.url))
+    return outcomes
+
+
+def retry_item_assets(
+    items: Iterable[ArchiveItem],
+    ingestor: Ingestor,
+    *,
+    progress: Optional[Progress] = None,
+) -> list[AssetRetryOutcome]:
+    """Re-download missing/oversized assets for already-archived items.
+
+    For each item, re-runs asset collection + download (idempotent — assets on
+    disk are kept, only missing URLs are fetched, ``too_large`` is re-judged
+    against the current size limit) via :meth:`Ingestor.retry_assets`, which
+    persists the refreshed asset maps. Returns one :class:`AssetRetryOutcome`
+    per item describing how many assets were recovered vs. still missing. One
+    item's failure is reported and never aborts the run.
+    """
+    emit = progress or (lambda msg: None)
+    outcomes: list[AssetRetryOutcome] = []
+    for item in items:
+        before = len(item.asset_issues)
+        try:
+            ingestor.retry_assets(item)
+        except Exception as exc:
+            log.error("asset retry failed for %r: %s", item.title, exc)
+            outcomes.append(
+                AssetRetryOutcome(item, failed=True, detail=str(exc))
+            )
+            continue
+        remaining = len(item.asset_issues)
+        recovered = max(0, before - remaining)
+        emit(f"retry  {item.title} (+{recovered}, {remaining} left)")
+        outcomes.append(
+            AssetRetryOutcome(item, recovered=recovered, remaining=remaining)
+        )
     return outcomes
 
 
