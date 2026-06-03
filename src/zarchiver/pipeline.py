@@ -40,6 +40,7 @@ class Action(str, Enum):
     UPDATED = "updated"
     SKIPPED = "skipped"
     EXPORTED = "exported"
+    SUMMARIZED = "summarized"
     FAILED = "failed"
 
 
@@ -110,6 +111,49 @@ def export_items(
         outcomes.append(
             ItemOutcome(item, Action.EXPORTED, url=item.url, exports=exports)
         )
+    return outcomes
+
+
+def resummarize_items(
+    items: Iterable[ArchiveItem],
+    summarizer,
+    store,
+    *,
+    only_empty: bool = False,
+    progress: Optional[Progress] = None,
+) -> list[ItemOutcome]:
+    """Re-run AI summarization for already-archived items and persist results.
+
+    Reads each item from the DB, calls the summarizer on its stored content
+    (no re-fetch, no network beyond the LLM), and saves the refreshed
+    :class:`~zarchiver.models.AIResult` back via ``store.save_item``. Used by
+    the ``reai`` command — e.g. to apply a new ``ai.category_reference`` to
+    content archived before it was set.
+
+    With ``only_empty`` True, items that already carry a non-empty AI result are
+    skipped. An item whose summary call fails is reported as ``FAILED`` and left
+    untouched; one failure never aborts the run.
+    """
+    emit = progress or (lambda msg: None)
+    outcomes: list[ItemOutcome] = []
+    for item in items:
+        if only_empty and not item.ai.is_empty():
+            emit(f"skip   {item.title}")
+            outcomes.append(
+                ItemOutcome(item, Action.SKIPPED, url=item.url, detail="has-ai")
+            )
+            continue
+        try:
+            item.ai = summarizer.summarize_with_retry(item)
+            store.save_item(item)
+        except Exception as exc:
+            log.error("re-summarize failed for %r: %s", item.title, exc)
+            outcomes.append(
+                ItemOutcome(item, Action.FAILED, url=item.url, detail=str(exc))
+            )
+            continue
+        emit(f"reai   {item.title}")
+        outcomes.append(ItemOutcome(item, Action.SUMMARIZED, url=item.url))
     return outcomes
 
 

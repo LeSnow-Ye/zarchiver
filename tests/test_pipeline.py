@@ -8,8 +8,8 @@ import pytest
 from zarchiver.config import Config
 from zarchiver.exporters.base import Exporter, ExportResult
 from zarchiver.ingest import Ingestor
-from zarchiver.models import ArchiveItem, ContentType
-from zarchiver.pipeline import Action, Pipeline, export_items
+from zarchiver.models import AIResult, ArchiveItem, ContentType
+from zarchiver.pipeline import Action, Pipeline, export_items, resummarize_items
 from zarchiver.sources.base import Source, SourceError
 from zarchiver.store import StateStore
 
@@ -244,6 +244,61 @@ def test_export_items_overwrites_by_default(tmp_path, store):
     outcomes = export_items([item], [exp])  # no skip_existing → re-export
     assert outcomes[0].action == Action.EXPORTED
     assert len(exp.exported) == 2
+
+
+# ---------------------------------------------------------------------- #
+# resummarize_items (reai command)
+# ---------------------------------------------------------------------- #
+class FakeSummarizer:
+    """Returns a canned AIResult and counts calls."""
+
+    def __init__(self, result=None):
+        self.result = result or AIResult(
+            summary="new", tags=["t"], category="c", model="m"
+        )
+        self.calls = 0
+
+    def summarize_with_retry(self, item):
+        self.calls += 1
+        return self.result
+
+
+def test_resummarize_updates_and_persists(store):
+    item = _item()
+    store.save_item(item)  # archived with empty AI
+    s = FakeSummarizer()
+    outcomes = resummarize_items([store.load_item(item.key)], s, store)
+    assert outcomes[0].action == Action.SUMMARIZED
+    assert s.calls == 1
+    # Refreshed result persisted back to the DB.
+    assert store.load_item(item.key).ai.summary == "new"
+
+
+def test_resummarize_only_empty_skips_summarized(store):
+    item = _item()
+    item.ai = AIResult(summary="existing", tags=["x"], category="y", model="m")
+    store.save_item(item)
+    s = FakeSummarizer()
+    outcomes = resummarize_items(
+        [store.load_item(item.key)], s, store, only_empty=True
+    )
+    assert outcomes[0].action == Action.SKIPPED
+    assert s.calls == 0  # untouched: already has an AI result
+    assert store.load_item(item.key).ai.summary == "existing"
+
+
+def test_resummarize_failure_is_non_fatal(store):
+    class BoomSummarizer:
+        def summarize_with_retry(self, item):
+            raise RuntimeError("api down")
+
+    item = _item()
+    store.save_item(item)
+    outcomes = resummarize_items([store.load_item(item.key)], BoomSummarizer(), store)
+    assert outcomes[0].action == Action.FAILED
+    assert "api down" in outcomes[0].detail
+    # Stored item left intact (still empty AI), not corrupted.
+    assert store.load_item(item.key).ai.is_empty()
 
 
 # ---------------------------------------------------------------------- #

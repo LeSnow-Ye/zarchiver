@@ -180,6 +180,37 @@ Images missing from an item's asset map (e.g. a download that failed at ingest)
 keep their original remote URL rather than triggering a fetch — export never
 touches the network.
 
+## `reai`
+
+Regenerate AI summaries, tags, and category for items **already in the
+database**, re-running the LLM over their stored content — no re-fetch, no
+browser. Useful to:
+
+- apply a new `ai.category_reference` to content archived before you set it, or
+- fill in items that were archived with `--no-ai`.
+
+```bash
+uv run zarchiver reai                       # all items (asks to confirm)
+uv run zarchiver reai --only-empty          # only items with no AI result yet
+uv run zarchiver reai --type article -n 50  # 50 most-recent articles
+uv run zarchiver reai --key zhihu:article:35562420   # one item
+uv run zarchiver reai -y --export           # no prompt, re-render after
+```
+
+Options:
+- `--only-empty` — only items that don't already have an AI result (e.g. ones
+  archived with `--no-ai`); items already summarized are skipped.
+- `--type answer|article|pin` — filter by content type.
+- `--key platform:type:id` — re-summarize a single item.
+- `--limit/-n N` — cap how many items (0 = all).
+- `--export/-e` — re-render the affected items (Obsidian/HTML) after
+  re-summarizing, so the new tags/category land in your notes.
+- `--yes/-y` — skip the confirmation prompt.
+
+Each item costs one LLM call, so `reai` confirms before running unless you pass
+`--yes`. It needs AI configured (`[ai].enabled` and an API key); without that it
+exits with a clear error.
+
 ## `status`
 
 Show how many items are archived and the most recent ones.
@@ -225,5 +256,7 @@ DB. When an item's content actually changes, its hash changes and `update`
 re-ingests it.
 
 Under `skip` (the default), an item already in the DB is left untouched — it is
-not re-fetched, re-summarized, or re-exported. To re-render output from the DB
-without re-fetching, use [`export`](#export).
+not re-fetched, re-summarized, or re-exported. To refresh AI summaries/tags for
+already-archived items (for example after setting `ai.category_reference`), use
+[`reai`](#reai); to re-render output from the DB without re-fetching, use
+[`export`](#export).

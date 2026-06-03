@@ -6,6 +6,7 @@ Commands:
 * ``archive URL`` — archive a single answer/article/pin, or a batch (collection,
   column, or question); the URL kind is auto-detected.
 * ``export``      — re-render already-archived items from the DB, fully offline.
+* ``reai``        — regenerate AI summaries/tags/category for archived items.
 * ``status``      — show how many items are archived and the most recent ones.
 
 Everything is driven by ``config.toml`` (see ``config.example.toml``); flags on
@@ -35,6 +36,7 @@ from zarchiver.pipeline import (
     Pipeline,
     export_items,
     make_image_fetcher,
+    resummarize_items,
 )
 from zarchiver.sources.zhihu import ZhihuSource
 from zarchiver.sources.zhihu.browser import ZhihuBrowser
@@ -201,6 +203,8 @@ def _report(outcomes: list[ItemOutcome]) -> None:
     ]
     if counts[Action.EXPORTED]:
         parts.append(f"[green]{counts[Action.EXPORTED]} exported[/green]")
+    if counts[Action.SUMMARIZED]:
+        parts.append(f"[green]{counts[Action.SUMMARIZED]} summarized[/green]")
     if counts[Action.FAILED]:
         parts.append(f"[red]{counts[Action.FAILED]} failed[/red]")
     if asset_issues["too_large"]:
@@ -391,6 +395,93 @@ def export(
             items, exporters, skip_existing=skip_existing,
             progress=lambda msg: log.info("%s", msg),
         )
+        _report(outcomes)
+    finally:
+        store.close()
+
+
+@app.command()
+def reai(
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+    key: Optional[str] = typer.Option(
+        None, "--key", help="Re-summarize only the item with this key."
+    ),
+    content_type: Optional[str] = typer.Option(
+        None, "--type", help="Filter by content type: answer | article | pin."
+    ),
+    only_empty: bool = typer.Option(
+        False,
+        "--only-empty",
+        help="Only items that have no AI result yet (skip ones already summarized).",
+    ),
+    limit: int = typer.Option(0, "--limit", "-n", help="Max items (0 = all)."),
+    export: bool = typer.Option(
+        False,
+        "--export",
+        "-e",
+        help="Re-render the affected items after re-summarizing.",
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt."
+    ),
+):
+    """Regenerate AI summaries/tags/category for already-archived items.
+
+    Re-runs the LLM over content already in the DB (no re-fetch) and saves the
+    refreshed result. Useful after setting or changing ``ai.category_reference``,
+    or to fill in items archived with ``--no-ai``. This spends LLM tokens — one
+    call per item — so it confirms first unless ``--yes`` is given.
+    """
+    from zarchiver.store import StateStore
+
+    cfg = Config.load(config)
+    summarizer = _build_summarizer(cfg)
+    if summarizer is None:
+        out.print(
+            "[red]AI is disabled or has no API key.[/red] Enable [ai] and set "
+            "DEEPSEEK_API_KEY (or ai.api_key) before running reai."
+        )
+        raise typer.Exit(code=1)
+
+    store = StateStore(cfg.archive.db_path)
+    try:
+        if key:
+            item = store.load_item(key)
+            items = [item] if item is not None else []
+            if not items:
+                out.print(f"[red]No archived item with key {key}.[/red]")
+                return
+        else:
+            items = list(store.iter_items(content_type=content_type, limit=limit))
+        if only_empty:
+            items = [it for it in items if it.ai.is_empty()]
+        if not items:
+            out.print("[yellow]No matching items to re-summarize.[/yellow]")
+            return
+
+        if not yes:
+            ok = typer.confirm(
+                f"Re-summarize {len(items)} item(s) with {cfg.ai.model}? "
+                "This spends LLM tokens."
+            )
+            if not ok:
+                out.print("Aborted.")
+                return
+
+        outcomes = resummarize_items(
+            items, summarizer, store,
+            only_empty=only_empty,
+            progress=lambda msg: log.info("%s", msg),
+        )
+        if export:
+            done = [o.item for o in outcomes if o.action == Action.SUMMARIZED]
+            if done:
+                exporters = _build_exporters(cfg)
+                if exporters:
+                    outcomes += export_items(
+                        done, exporters,
+                        progress=lambda msg: log.info("%s", msg),
+                    )
         _report(outcomes)
     finally:
         store.close()

@@ -75,7 +75,8 @@ category_reference = """
 ## 注意事项
 
 - **重新分类**：设置或修改 `category_reference` 只影响**之后归档**的内容；已归档条目
-  不会自动重新分类（除非其正文变化并以 `update` 策略触发重新总结）。
+  不会自动重新分类（除非其正文变化并以 `update` 策略触发重新总结）。要对已归档条目
+  按新列表重新打标，运行 `zarchiver reai`（见 [usage.md](usage.md)）。
 - **语言**：列表语言应与 `[ai] language` 一致；中英皆可。
 - **可选**：随时把 `category_reference` 清空即可退回自由生成模式。
 - **配置位置**：`config.toml` 是你的个人配置（已 gitignore）；`config.example.toml`

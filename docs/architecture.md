@@ -71,8 +71,8 @@ stable across reloads.
 | `ai/base` | `LLMProvider` ABC. |
 | `ai/deepseek` | DeepSeek (OpenAI-compatible) provider. |
 | `ai/summarizer` | Builds prompts, parses the JSON result into an `AIResult`. |
-| `pipeline` | Ingest orchestration + offline `export_items` fan-out. |
-| `cli` | Typer entrypoint (`login`, `archive`, `export`, `status`). |
+| `pipeline` | Ingest orchestration + offline `export_items` / `resummarize_items` fan-out. |
+| `cli` | Typer entrypoint (`login`, `archive`, `export`, `reai`, `status`). |
 
 ## Why a headful browser
 
